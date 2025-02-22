@@ -321,15 +321,31 @@ class CodeOwnersAnalyzer {
 
             // Set up observer for dynamic updates
             const observer = new MutationObserver((mutations) => {
-                console.log('File changes detected');
-                this.updateChangedFiles();
+                // Only process mutations that actually change the file list
+                const relevantChanges = mutations.some(mutation => {
+                    // Check if nodes were added/removed
+                    if (mutation.addedNodes.length > 0 || mutation.removedNodes.length > 0) {
+                        // Verify the changes are file-related
+                        return Array.from(mutation.addedNodes).some(node => 
+                            node.classList?.contains('file') ||
+                            node.querySelector?.('.file')
+                        ) || Array.from(mutation.removedNodes).some(node => 
+                            node.classList?.contains('file') ||
+                            node.querySelector?.('.file')
+                        );
+                    }
+                    return false;
+                });
+
+                if (relevantChanges) {
+                    console.log('File changes detected - updating file list');
+                    this.updateChangedFiles();
+                }
             });
 
             observer.observe(fileList, { 
                 childList: true, 
-                subtree: true,
-                attributes: true,
-                attributeFilter: ['data-path']
+                subtree: true
             });
         };
 
