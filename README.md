@@ -1,16 +1,25 @@
 # GitHub PR Code Owners Analyzer
 
-A Chrome extension that helps analyze code ownership in GitHub pull requests by showing which users can provide full coverage approval based on the repository's CODEOWNERS file.
+A Chrome extension that analyzes GitHub pull requests to identify code owners and help ensure proper reviews.
 
 ## Features
 
-- 🔍 Automatically detects and parses CODEOWNERS files
-- 👥 Shows users who can individually approve all changed files
-- 🤝 Identifies combinations of users who together can approve all changes
-- ✅ Highlights which owners have already approved the PR
-- 🎯 Updates in real-time as files change in the PR
-- 🖱️ Draggable UI panel with collapsible sections
-- 🌙 Supports GitHub dark mode
+- Automatically detects and displays code owners for files in a GitHub pull request
+- Shows owners who can individually approve all changed files
+- Displays up to 3 optimal combinations of reviewers who together can approve all files
+- Highlights which owners who have already approved the PR
+- Persists across page refreshes but respects manual dismissal
+- Toggle extension on/off with a single click
+
+## How It Works
+
+The extension:
+
+1. Parses the repository's CODEOWNERS file to understand ownership rules
+2. Analyzes the files changed in the current PR
+3. Identifies owners who can individually approve all changes
+4. Finds optimal combinations of reviewers who together can cover all files
+5. Shows approval status for each owner based on PR reviews
 
 ## Installation
 
@@ -23,42 +32,27 @@ A Chrome extension that helps analyze code ownership in GitHub pull requests by 
 ## Usage
 
 1. Navigate to any GitHub pull request's "Files changed" tab
-2. The Code Owners Analysis panel will appear on the right side
-3. The panel shows two main sections:
-   - **Full Coverage Owners**: Users who can individually approve all changed files
-   - **Combined Coverage Sets**: Groups of users who together can approve all files
-4. Green checkmarks (✓) indicate owners who have already approved the PR
-5. Hover over the info icons (ℹ️) for more details about each section
-6. You can:
-   - Drag the panel to reposition it
-   - Double-click section titles or use arrows to collapse/expand sections
-   - Double-click the top bar or use the arrow to collapse the entire panel
-   - Click the X to close the panel (the extension remains active)
-
-## Controls
-
-- 🔄 Click the extension icon in the toolbar to enable/disable the extension
-- 👆 Double-click section headers to collapse/expand sections
-- ✨ Drag the panel by its header to reposition
-- ❌ Click the X to close the panel (extension remains active)
+2. The extension will automatically display a panel showing:
+   - Full Coverage Owners: Individuals who can approve all changed files
+   - Combined Coverage Sets: Optimal combinations of reviewers who together can approve all files
+3. Green checkmarks indicate owners who have already approved the PR
+4. Click section headers to collapse/expand sections
+5. Click the X to dismiss the panel for the current session
 
 ## Development
 
-The extension consists of these main files:
-- `manifest.json`: Extension configuration
-- `content.js`: Main logic for analyzing code ownership and UI
+### Building the Extension
+
+1. Clone the repository
+2. Make your changes
+3. Load the unpacked extension in Chrome's developer mode
+
+### Files
+
+- `content.js`: Main content script that analyzes PRs and displays results
 - `background.js`: Handles extension state and icon updates
-- `styles.css`: UI styling
-
-## Notes
-
-- The extension currently works only on the "Files changed" tab of pull requests
-- CODEOWNERS file is searched in the default location (.github/CODEOWNERS)
-- The extension respects GitHub's dark/light theme settings
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+- `styles.css`: Styling for the UI panel
+- `manifest.json`: Extension configuration
 
 ## License
 

@@ -587,13 +587,13 @@ class CodeOwnersAnalyzer {
         console.log('Owner to files mapping:', Object.fromEntries([...ownerToFiles].map(([k, v]) => [k, Array.from(v)])));
         console.log('Full coverage owners:', Array.from(fullCoverageOwners));
 
-        // Find combined set of owners for full coverage
-        const combinedSet = this.findCombinedOwnerSet(ownerToFiles, filesWithOwners);
-        console.log('Combined Coverage Sets:', Array.from(combinedSet));
+        // Find combined sets of owners for full coverage
+        const combinedSets = this.findCombinedOwnerSet(ownerToFiles, filesWithOwners);
+        console.log('Combined Coverage Sets:', combinedSets);
 
         return {
             fullCoverageOwners: Array.from(fullCoverageOwners),
-            combinedSet: Array.from(combinedSet)
+            combinedSets: combinedSets
         };
     }
 
@@ -616,10 +616,10 @@ class CodeOwnersAnalyzer {
         
         if (partialOwners.length === 0) {
             console.log('No partial coverage owners found');
-            return new Set();
+            return [];
         }
 
-        let bestCombination = [];
+        let combinedSets = [];
 
         // Helper function to get combination coverage
         const getCoverage = (combination) => {
@@ -641,18 +641,20 @@ class CodeOwnersAnalyzer {
                 
                 // Only consider combinations that provide full coverage
                 if (coverage.size === filesWithOwners.size) {
-                    if (bestCombination.length === 0 || combination.length < bestCombination.length) {
-                        bestCombination = combination;
-                        console.log('Found new best combination:', bestCombination);
-                    }
+                    combinedSets.push(combination);
+                    console.log('Found valid combination:', combination);
                 }
             }
             
-            // If we found a valid combination, no need to try larger combinations
-            if (bestCombination.length > 0) break;
+            // If we found valid combinations at this size, no need to try larger combinations
+            if (combinedSets.length > 0) break;
         }
 
-        return new Set(bestCombination);
+        // Sort by combination size (smaller is better)
+        combinedSets.sort((a, b) => a.length - b.length);
+        
+        // Return up to 3 best combinations
+        return combinedSets.slice(0, 3);
     }
 
     getCombinations(arr, k) {
@@ -798,10 +800,10 @@ class CodeOwnersAnalyzer {
         `;
     }
 
-    showResults(fullCoverageOwners, combinedSet, approvedReviewers) {
+    showResults(fullCoverageOwners, combinedSets, approvedReviewers) {
         console.log('Showing results with approvals:', { 
             fullCoverageOwners, 
-            combinedSet, 
+            combinedSets, 
             approvedReviewers: Array.from(approvedReviewers)
         });
         const contentArea = document.getElementById('code-owners-content');
@@ -881,8 +883,12 @@ class CodeOwnersAnalyzer {
                         </div>
                     </div>
                     <ul id="combined-coverage-list" class="owners-list">
-                        ${combinedSet.length 
-                            ? `<li class="mb-1">${createCombinedSetElement(combinedSet)}</li>`
+                        ${combinedSets.length 
+                            ? combinedSets.map((set, index) => `
+                                ${index > 0 ? `<li class="border-top color-border-muted"></li>` : ''}
+                                <li class="py-2">
+                                    ${createCombinedSetElement(set)}
+                                </li>`).join('')
                             : '<li class="color-fg-muted">No Combined Coverage Sets found</li>'}
                     </ul>
                 </div>
@@ -933,26 +939,26 @@ class CodeOwnersAnalyzer {
         });
     }
 
-    updateUI() {
+    async updateUI() {
         console.log('Updating UI...');
-        const panel = document.querySelector('.code-owners-panel') || this.createUI();
         const contentArea = document.getElementById('code-owners-content');
-        
-        if (!contentArea) {
-            console.error('Could not find content area');
-            return;
-        }
-        
-        // Show loading while we analyze
         this.showLoading(contentArea);
 
-        // Get approved reviewers and analyze ownership
-        this.getApprovedReviewers().then(approvedReviewers => {
-            console.log('Got approved reviewers:', approvedReviewers);
-            const { fullCoverageOwners, combinedSet } = this.analyzeOwnership();
-            console.log('Analysis complete, updating UI with results');
-            this.showResults(fullCoverageOwners, combinedSet, approvedReviewers);
-        });
+        try {
+            // Get approved reviewers
+            const approvedReviewers = await this.getApprovedReviewers();
+            
+            // Analyze ownership
+            const { fullCoverageOwners, combinedSets } = this.analyzeOwnership();
+            
+            // Update UI with results
+            this.showResults(fullCoverageOwners, combinedSets, approvedReviewers);
+        } catch (error) {
+            console.error('Error updating UI:', error);
+            if (contentArea) {
+                contentArea.innerHTML = `<div class="error-message">Error analyzing code owners: ${error.message}</div>`;
+            }
+        }
     }
 }
 
