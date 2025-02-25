@@ -820,7 +820,7 @@ class CodeOwnersAnalyzer {
                 <li>
                     <img src="https://github.com/${username}.png" alt="${username}" 
                          width="20" height="20" class="avatar" />
-                    <a href="https://github.com/${username}" class="Link--primary">${owner}</a>
+                    <a href="https://github.com/${username}" class="Link--primary" target="_blank" rel="noopener noreferrer">${owner}</a>
                     ${isApproved ? '<span class="color-fg-success">✓</span>' : ''}
                 </li>`;
         };
@@ -834,7 +834,7 @@ class CodeOwnersAnalyzer {
                     <span class="d-inline-flex flex-items-center">
                         <img src="https://github.com/${username}.png" alt="${username}" 
                              width="20" height="20" class="avatar mr-1" />
-                        <a href="https://github.com/${username}" class="Link--primary">${owner}</a>
+                        <a href="https://github.com/${username}" class="Link--primary" target="_blank" rel="noopener noreferrer">${owner}</a>
                         ${isApproved ? '<span class="color-fg-success">✓</span>' : ''}
                     </span>`;
             }).join('') + '</span>';
@@ -892,6 +892,9 @@ class CodeOwnersAnalyzer {
                             : '<li class="color-fg-muted">No Combined Coverage Sets found</li>'}
                     </ul>
                 </div>
+                <div class="status-bar mt-3 py-1 px-2 color-bg-subtle f6 color-fg-muted" style="border-top: 1px solid var(--color-border-muted); margin-left: -16px; margin-right: -16px; margin-bottom: -16px; border-bottom-left-radius: 6px; border-bottom-right-radius: 6px;">
+                    <span id="status-text">Processed ${this.changedFiles.size} files</span>
+                </div>
             </div>
         `;
 
@@ -937,6 +940,45 @@ class CodeOwnersAnalyzer {
                 tooltip.style.left = (rect.left + rect.width/2) + 'px';
             });
         });
+
+        // Add hover handlers for owners to update the status bar
+        const statusText = document.getElementById('status-text');
+        const baseStatusText = `Processed ${this.changedFiles.size} files`;
+
+        // Add hover handlers for individual owners
+        contentArea.querySelectorAll('.owners-list li a').forEach(ownerLink => {
+            const owner = ownerLink.textContent;
+            const ownerFiles = this.getOwnerFiles(owner);
+            
+            ownerLink.parentElement.addEventListener('mouseenter', () => {
+                if (ownerFiles) {
+                    statusText.textContent = `${owner} owns ${ownerFiles.size}/${this.changedFiles.size} files`;
+                }
+            });
+            
+            ownerLink.parentElement.addEventListener('mouseleave', () => {
+                statusText.textContent = baseStatusText;
+            });
+        });
+
+        // Add hover handlers for combined set owners
+        contentArea.querySelectorAll('.combined-set .d-inline-flex').forEach(ownerElement => {
+            const ownerLink = ownerElement.querySelector('a');
+            if (ownerLink) {
+                const owner = ownerLink.textContent;
+                const ownerFiles = this.getOwnerFiles(owner);
+                
+                ownerElement.addEventListener('mouseenter', () => {
+                    if (ownerFiles) {
+                        statusText.textContent = `${owner} owns ${ownerFiles.size}/${this.changedFiles.size} files`;
+                    }
+                });
+                
+                ownerElement.addEventListener('mouseleave', () => {
+                    statusText.textContent = baseStatusText;
+                });
+            }
+        });
     }
 
     async updateUI() {
@@ -959,6 +1001,17 @@ class CodeOwnersAnalyzer {
                 contentArea.innerHTML = `<div class="error-message">Error analyzing code owners: ${error.message}</div>`;
             }
         }
+    }
+
+    getOwnerFiles(owner) {
+        const files = new Set();
+        this.changedFiles.forEach(file => {
+            const fileOwners = this.getFileOwners(file);
+            if (fileOwners.has(owner)) {
+                files.add(file);
+            }
+        });
+        return files;
     }
 }
 
