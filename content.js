@@ -696,7 +696,7 @@ class CodeOwnersAnalyzer {
         header.className = 'd-flex flex-items-center p-2 code-owners-header';
         header.style.cssText = 'cursor: move;';
         header.innerHTML = `
-            <div class="flex-1" style="user-select: none;">Code Owners Analysis</div>
+            <div class="flex-1" style="user-select: none;">GitHub PR Code Owners Analyzer</div>
             <div class="d-flex">
                 <button class="btn-octicon" id="code-owners-collapse">
                     <svg class="octicon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
