@@ -4,6 +4,8 @@ class CodeOwnersAnalyzer {
         this.codeownersMap = new Map();
         this.changedFiles = new Set();
         this.approvedReviewers = new Set();
+        this._fileOwnersCache = {};
+        this._parsedPatterns = null;
     }
 
     async initialize() {
@@ -16,6 +18,11 @@ class CodeOwnersAnalyzer {
         }
         
         try {
+            // Cache DOM elements that are used multiple times
+            const headerMeta = document.querySelector('.gh-header-meta');
+            const headerTitle = document.querySelector('.gh-header-title');
+            const tabContent = document.querySelector('.pull-request-tab-content');
+            
             // Wait for the PR header and state to be loaded
             await Promise.race([
                 this.waitForElement('.gh-header-meta'),
@@ -37,41 +44,19 @@ class CodeOwnersAnalyzer {
             }
 
             // Show UI for both draft and open PRs
-            const draftDataAttr = document.querySelector('[data-pull-is-draft="true"]');
-            const draftState = document.querySelector('.State--draft');
-            const draftLabel = document.querySelector('.js-draft-label');
-            const prTitle = document.querySelector('.js-issue-title');
-            const prHeader = document.querySelector('.gh-header-title');
             const prStateLabel = document.querySelector('.State');
-            
-            // Additional draft indicators
-            const isDraftByData = !!draftDataAttr;
-            const isDraftByStateClass = !!draftState;
-            const isDraftByLabel = !!draftLabel;
-            const isDraftByTitle = !!(prTitle && prTitle.textContent.toLowerCase().includes('draft:'));
-            const isDraftByHeader = !!(prHeader && prHeader.textContent.toLowerCase().includes('draft:'));
-            const isDraftByStateText = !!(prStateLabel && prStateLabel.textContent.toLowerCase().includes('draft'));
-            
-            const isDraft = isDraftByData || isDraftByStateClass || isDraftByLabel || isDraftByTitle || isDraftByHeader || isDraftByStateText;
+            const isDraft = prStateLabel && prStateLabel.textContent.toLowerCase().includes('draft');
             const isOpen = document.querySelector('.State--open') || (prStateLabel && prStateLabel.textContent.toLowerCase().includes('open'));
             
             console.log('Draft PR detection details:', {
-                'data-pull-is-draft': isDraftByData,
-                'State--draft class': isDraftByStateClass,
-                'js-draft-label class': isDraftByLabel,
-                'Title contains draft': isDraftByTitle,
-                'Header contains draft': isDraftByHeader,
                 'State label text': prStateLabel?.textContent,
-                isDraft,
-                isOpen: !!isOpen,
-                'PR Title': prTitle?.textContent,
-                'PR Header': prHeader?.textContent
+                isDraft
             });
 
             // Log all state-related elements for debugging
             console.log('All state elements:', {
-                'gh-header-meta': document.querySelector('.gh-header-meta')?.outerHTML,
-                'gh-header-title': document.querySelector('.gh-header-title')?.outerHTML,
+                'gh-header-meta': headerMeta?.outerHTML,
+                'gh-header-title': headerTitle?.outerHTML,
                 'pull-request-header': document.querySelector('.pull-request-header')?.outerHTML,
                 'State elements': Array.from(document.querySelectorAll('.State')).map(el => ({
                     text: el.textContent,
@@ -305,6 +290,9 @@ class CodeOwnersAnalyzer {
         }
         
         console.log('Finished parsing. Found owners:', Array.from(this.codeownersMap.keys()));
+        
+        this._parsedPatterns = this.codeownersMap;
+        return this.codeownersMap;
     }
 
     observeFileChanges() {
@@ -518,6 +506,16 @@ class CodeOwnersAnalyzer {
     }
 
     getFileOwners(filePath) {
+        // Check if we've already determined owners for this file
+        if (this._fileOwnersCache && this._fileOwnersCache[filePath]) {
+            return this._fileOwnersCache[filePath];
+        }
+        
+        // Initialize cache if not exists
+        if (!this._fileOwnersCache) {
+            this._fileOwnersCache = {};
+        }
+        
         const owners = new Set();
         let mostSpecificPattern = '';
         let mostSpecificOwners = new Set();
@@ -552,6 +550,9 @@ class CodeOwnersAnalyzer {
         }
 
         console.log(`Found ${owners.size} owners for file ${filePath} (pattern: ${mostSpecificPattern}):`, Array.from(owners));
+        
+        // Cache the result before returning
+        this._fileOwnersCache[filePath] = owners;
         return owners;
     }
 
@@ -1013,6 +1014,19 @@ class CodeOwnersAnalyzer {
         });
         return files;
     }
+
+    calculateMinimumReviewers() {
+        // If there's a single owner that covers all files, return early
+        if (this.fullCoverageOwners.length > 0) {
+            console.log('Found full coverage owners, skipping combination analysis');
+            return {
+                fullCoverageOwners: this.fullCoverageOwners,
+                combinedSets: []
+            };
+        }
+        
+        // ... existing combinatorial analysis ...
+    }
 }
 
 // Modify the removeUI function to only set the flag when explicitly called from the close button
@@ -1102,11 +1116,11 @@ async function initializeAnalyzer() {
 let lastUrl = location.href;
 let lastUrlWithoutFragment = location.href.split('#')[0];
 
-new MutationObserver(async () => {
+async function handleUrlChange() {
     const url = location.href;
     const urlWithoutFragment = url.split('#')[0];
     
-    // Only consider it a navigation if the base URL changes (not just the fragment)
+    // Only consider it a navigation if the base URL changes
     if (urlWithoutFragment !== lastUrlWithoutFragment) {
         lastUrl = url;
         lastUrlWithoutFragment = urlWithoutFragment;
@@ -1119,26 +1133,11 @@ new MutationObserver(async () => {
             removeUI();
         }
     }
-}).observe(document, { subtree: true, childList: true });
+}
 
-// Also handle Turbo navigation events
-document.addEventListener('turbo:render', async () => {
-    const url = location.href;
-    const urlWithoutFragment = url.split('#')[0];
-    
-    // Only reinitialize if the base URL has changed
-    if (urlWithoutFragment !== lastUrlWithoutFragment) {
-        lastUrlWithoutFragment = urlWithoutFragment;
-        
-        if (url.includes('/files')) {
-            // Wait for GitHub's content to load
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            initializeAnalyzer(); // Will check enabled state internally
-        } else {
-            removeUI();
-        }
-    }
-});
+// Then use this function in both event handlers:
+new MutationObserver(handleUrlChange).observe(document, { subtree: true, childList: true });
+document.addEventListener('turbo:render', handleUrlChange);
 
 // Initialize on page load if we're on the files tab
 if (location.href.includes('/files')) {
