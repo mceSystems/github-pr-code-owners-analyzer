@@ -12,10 +12,10 @@ chrome.action.onClicked.addListener(async () => {
     await chrome.storage.local.set({ enabled: newState });
     updateExtensionIcon(newState);
     
-    // Send message to all GitHub tabs about the state change
+    // Find all GitHub tabs and refresh them
     const tabs = await chrome.tabs.query({ url: '*://github.com/*' });
     tabs.forEach(tab => {
-        chrome.tabs.sendMessage(tab.id, { action: 'stateChanged', enabled: newState });
+        chrome.tabs.reload(tab.id);
     });
 });
 

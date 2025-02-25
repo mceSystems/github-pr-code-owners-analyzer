@@ -8,6 +8,13 @@ class CodeOwnersAnalyzer {
 
     async initialize() {
         console.log('Initializing CodeOwnersAnalyzer...');
+        
+        // Check if panel was explicitly closed this session
+        if (sessionStorage.getItem('codeOwnersPanelClosed') === 'true') {
+            console.log('Panel was explicitly closed this session, not showing UI');
+            return;
+        }
+        
         try {
             // Wait for the PR header and state to be loaded
             await Promise.race([
@@ -81,7 +88,7 @@ class CodeOwnersAnalyzer {
                 const contentArea = document.getElementById('code-owners-content');
                 this.showLoading(contentArea);
 
-                // Fetch CODEOWNERS and set up file observation first
+                // Fetch CODEOWNERS first
                 await this.fetchCodeowners();
                 
                 // Wait for the page to be fully loaded
@@ -96,13 +103,8 @@ class CodeOwnersAnalyzer {
                     });
                 }
 
-                // Now process data and update UI
-                await this.getApprovedReviewers().then(approvedReviewers => {
-                    console.log('Got approved reviewers:', approvedReviewers);
-                    const { fullCoverageOwners, combinedSet } = this.analyzeOwnership();
-                    console.log('Analysis complete, updating UI with results');
-                    this.showResults(fullCoverageOwners, combinedSet, approvedReviewers);
-                });
+                // Don't update UI here - it will be updated by updateChangedFiles
+                // when the file list is ready
             } else {
                 console.log('PR is neither draft nor open, not showing UI');
                 removeUI();
@@ -319,7 +321,7 @@ class CodeOwnersAnalyzer {
             // Initial update
             this.updateChangedFiles();
 
-            // Set up observer for dynamic updates
+            // Set up observer for dynamic updates during initial load only
             const observer = new MutationObserver((mutations) => {
                 // Only process mutations that actually change the file list
                 const relevantChanges = mutations.some(mutation => {
@@ -340,6 +342,16 @@ class CodeOwnersAnalyzer {
                 if (relevantChanges) {
                     console.log('File changes detected - updating file list');
                     this.updateChangedFiles();
+                    
+                    // Check if all files are loaded
+                    const filesCounter = document.querySelector('#files_tab_counter');
+                    const expectedCount = parseInt(filesCounter?.getAttribute('title') || '0');
+                    const currentCount = document.querySelectorAll('.file').length;
+                    
+                    if (currentCount >= expectedCount && expectedCount > 0) {
+                        console.log('All files loaded, disconnecting observer');
+                        observer.disconnect();
+                    }
                 }
             });
 
@@ -377,7 +389,11 @@ class CodeOwnersAnalyzer {
         });
         
         console.log('Total files found:', this.changedFiles.size);
-        this.updateUI();
+        
+        // Only update UI if we have files and this is not the initial load
+        if (this.changedFiles.size > 0) {
+            this.updateUI();
+        }
     }
 
     async waitForAllFiles() {
@@ -744,7 +760,7 @@ class CodeOwnersAnalyzer {
 
         if (closeBtn) {
             closeBtn.addEventListener('click', () => {
-                removeUI();
+                removeUI(true);
             });
         }
 
@@ -940,25 +956,102 @@ class CodeOwnersAnalyzer {
     }
 }
 
-// Add this at the top level of the file
+// Modify the removeUI function to only set the flag when explicitly called from the close button
+function removeUI(fromCloseButton = false) {
+    const existingPanel = document.querySelector('.code-owners-panel');
+    if (existingPanel) {
+        existingPanel.remove();
+    }
+    
+    // Only set the session flag when explicitly closed with the X button
+    if (fromCloseButton) {
+        sessionStorage.setItem('codeOwnersPanelClosed', 'true');
+    }
+}
+
+// Add a function to clear the session flag on page refresh/navigation
+function clearSessionFlags() {
+    // Check if this is a fresh page load (not a navigation within GitHub SPA)
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        sessionStorage.removeItem('codeOwnersPanelClosed');
+    }
+}
+
+// Call this function when the page loads
+window.addEventListener('load', clearSessionFlags);
+
+// Add a flag to track initialization
+let isInitializing = false;
+
+// Add this helper function to safely access storage
+async function safeStorageGet(keys) {
+    try {
+        return await chrome.storage.local.get(keys);
+    } catch (error) {
+        console.log('Storage access error (expected in some contexts):', error.message);
+        // Return a default value
+        const result = {};
+        if (Array.isArray(keys)) {
+            keys.forEach(key => result[key] = null);
+        } else if (typeof keys === 'string') {
+            result[keys] = null;
+        } else if (keys === null) {
+            // Return empty object for all keys
+        }
+        return result;
+    }
+}
+
+// Modify the initializeAnalyzer function to prevent multiple initializations
 async function initializeAnalyzer() {
-    // Check if extension is enabled before doing anything
-    const { enabled } = await chrome.storage.local.get(['enabled']);
-    if (!enabled) {
-        console.log('Extension is disabled, skipping initialization');
+    // Prevent multiple simultaneous initializations
+    if (isInitializing) {
+        console.log('Initialization already in progress, skipping');
         return;
     }
     
-    const analyzer = new CodeOwnersAnalyzer();
-    analyzer.initialize();
+    isInitializing = true;
+    
+    try {
+        // Clear the session flag on extension initialization
+        if (document.readyState === 'complete') {
+            sessionStorage.removeItem('codeOwnersPanelClosed');
+        }
+        
+        // Check if extension is enabled before doing anything
+        const { enabled } = await safeStorageGet(['enabled']);
+        
+        // Default to enabled if we couldn't access storage
+        if (enabled === null) {
+            console.log('Could not access storage, assuming extension is enabled');
+        } else if (!enabled) {
+            console.log('Extension is disabled, skipping initialization');
+            isInitializing = false;
+            return;
+        }
+        
+        const analyzer = new CodeOwnersAnalyzer();
+        await analyzer.initialize();
+    } catch (error) {
+        console.error('Error during initialization:', error);
+    } finally {
+        isInitializing = false;
+    }
 }
 
 // Handle GitHub's navigation
 let lastUrl = location.href;
+let lastUrlWithoutFragment = location.href.split('#')[0];
+
 new MutationObserver(async () => {
     const url = location.href;
-    if (url !== lastUrl) {
+    const urlWithoutFragment = url.split('#')[0];
+    
+    // Only consider it a navigation if the base URL changes (not just the fragment)
+    if (urlWithoutFragment !== lastUrlWithoutFragment) {
         lastUrl = url;
+        lastUrlWithoutFragment = urlWithoutFragment;
+        
         if (url.includes('/files')) {
             // Wait for GitHub's content to load
             await new Promise(resolve => setTimeout(resolve, 1000));
@@ -971,25 +1064,26 @@ new MutationObserver(async () => {
 
 // Also handle Turbo navigation events
 document.addEventListener('turbo:render', async () => {
-    if (location.href.includes('/files')) {
-        // Wait for GitHub's content to load
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        initializeAnalyzer(); // Will check enabled state internally
-    } else {
-        removeUI();
+    const url = location.href;
+    const urlWithoutFragment = url.split('#')[0];
+    
+    // Only reinitialize if the base URL has changed
+    if (urlWithoutFragment !== lastUrlWithoutFragment) {
+        lastUrlWithoutFragment = urlWithoutFragment;
+        
+        if (url.includes('/files')) {
+            // Wait for GitHub's content to load
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            initializeAnalyzer(); // Will check enabled state internally
+        } else {
+            removeUI();
+        }
     }
 });
 
 // Initialize on page load if we're on the files tab
 if (location.href.includes('/files')) {
     initializeAnalyzer(); // Will check enabled state internally
-}
-
-function removeUI() {
-    const existingPanel = document.querySelector('.code-owners-panel');
-    if (existingPanel) {
-        existingPanel.remove();
-    }
 }
 
 // Run on page load
@@ -999,18 +1093,5 @@ console.log('Content script loaded!');
 window.addEventListener('error', (event) => {
     if (event.message.includes('Access to storage is not allowed')) {
         event.preventDefault();
-    }
-});
-
-// Add this near the other event listeners
-chrome.runtime.onMessage.addListener((message) => {
-    if (message.action === 'stateChanged') {
-        if (message.enabled && location.href.includes('/files')) {
-            // Extension was enabled and we're on files tab
-            initializeAnalyzer();
-        } else if (!message.enabled) {
-            // Extension was disabled
-            removeUI();
-        }
     }
 }); 
