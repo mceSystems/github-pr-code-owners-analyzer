@@ -8,43 +8,36 @@ class CodeOwnersAnalyzer {
         this._parsedPatterns = null;
         this.MAX_COMBINATION_SIZE = 5; // limit the number of owners in a combination
         this.MAX_COMBINATIONS_TO_SHOW = 15; // limit the total number of combinations shown in UI
-        
+
         // Add debug mode flag - set to false in production
         this.DEBUG_MODE = true;
-        
+
         // Track files with and without owners
         this.filesWithOwners = new Set();
         this.filesWithoutOwners = new Set();
     }
 
     // Logger function to control verbosity
-    log(message, level = 'info', ...args) {
-        if (!this.DEBUG_MODE && level === 'debug') return;
-        
-        if (level === 'error') {
-            console.error(message, ...args);
-        } else if (level === 'warn') {
-            console.warn(message, ...args);
-        } else if (this.DEBUG_MODE || level === 'info') {
+    log(message, ...args) {
+        if (this.DEBUG_MODE) {
             console.log(message, ...args);
         }
     }
 
     async initialize() {
-        console.log('Initializing CodeOwnersAnalyzer...');
-        
+        this.log('Initializing CodeOwnersAnalyzer...');
+
         // Check if panel was explicitly closed this session
         if (sessionStorage.getItem('codeOwnersPanelClosed') === 'true') {
-            console.log('Panel was explicitly closed this session, not showing UI');
+            this.log('Panel was explicitly closed this session, not showing UI');
             return;
         }
-        
+
         try {
             // Cache DOM elements that are used multiple times
             const headerMeta = document.querySelector('.gh-header-meta');
             const headerTitle = document.querySelector('.gh-header-title');
-            const tabContent = document.querySelector('.pull-request-tab-content');
-            
+
             // Wait for the PR header and state to be loaded
             await Promise.race([
                 this.waitForElement('.gh-header-meta'),
@@ -52,20 +45,20 @@ class CodeOwnersAnalyzer {
                 this.waitForElement('.pull-request-tab-content'),
                 this.waitForElement('.js-pull-refresh-on-pjax')
             ]);
-            
+
             // Wait specifically for the PR state to be available
             await this.waitForPRState();
-            
-            console.log('PR UI elements loaded, checking state...');
+
+            this.log('PR UI elements loaded, checking state...');
 
             // Get PR author early
             this.prAuthor = await this.getPRAuthor();
-            console.log('PR author:', this.prAuthor);
+            this.log('PR author:', this.prAuthor);
 
             // Check if PR is merged first
             const mergeStatus = document.querySelector('.State--merged');
             if (mergeStatus) {
-                console.log('PR is merged, not showing UI');
+                this.log('PR is merged, not showing UI');
                 return;
             }
 
@@ -73,14 +66,14 @@ class CodeOwnersAnalyzer {
             const prStateLabel = document.querySelector('.State');
             const isDraft = prStateLabel && prStateLabel.textContent.toLowerCase().includes('draft');
             const isOpen = document.querySelector('.State--open') || (prStateLabel && prStateLabel.textContent.toLowerCase().includes('open'));
-            
-            console.log('Draft PR detection details:', {
+
+            this.log('Draft PR detection details:', {
                 'State label text': prStateLabel?.textContent,
                 isDraft
             });
 
             // Log all state-related elements for debugging
-            console.log('All state elements:', {
+            this.log('All state elements:', {
                 'gh-header-meta': headerMeta?.outerHTML,
                 'gh-header-title': headerTitle?.outerHTML,
                 'pull-request-header': document.querySelector('.pull-request-header')?.outerHTML,
@@ -92,8 +85,8 @@ class CodeOwnersAnalyzer {
             });
 
             if (isDraft || isOpen) {
-                console.log('PR is draft or open, proceeding with UI creation');
-                
+                this.log('PR is draft or open, proceeding with UI creation');
+
                 // Create UI immediately with loading state
                 this.createUI();
                 const contentArea = document.getElementById('code-owners-content');
@@ -101,7 +94,7 @@ class CodeOwnersAnalyzer {
 
                 // Fetch CODEOWNERS first
                 await this.fetchCodeowners();
-                
+
                 // Wait for the page to be fully loaded
                 if (document.readyState === 'complete') {
                     this.observeFileChanges();
@@ -117,7 +110,7 @@ class CodeOwnersAnalyzer {
                 // Don't update UI here - it will be updated by updateChangedFiles
                 // when the file list is ready
             } else {
-                console.log('PR is neither draft nor open, not showing UI');
+                this.log('PR is neither draft nor open, not showing UI');
                 removeUI();
             }
         } catch (error) {
@@ -154,28 +147,28 @@ class CodeOwnersAnalyzer {
     async waitForPRState() {
         return new Promise((resolve) => {
             const checkState = () => {
-                const stateElement = document.querySelector('.State') || 
-                                   document.querySelector('[data-pull-is-draft]') ||
-                                   document.querySelector('.js-issue-title');
-                
+                const stateElement = document.querySelector('.State') ||
+                    document.querySelector('[data-pull-is-draft]') ||
+                    document.querySelector('.js-issue-title');
+
                 if (stateElement) {
                     console.log('Found PR state element:', stateElement.outerHTML);
                     resolve();
                     return;
                 }
-                
+
                 setTimeout(checkState, 100);  // Check every 100ms
             };
-            
+
             checkState();
-            
+
             // Timeout after 10 seconds
             setTimeout(resolve, 10000);
         });
     }
 
     async fetchCodeowners() {
-        console.log('Fetching CODEOWNERS file...');
+        this.log('Fetching CODEOWNERS file...');
         try {
             // Get the current repository from the URL
             const pathParts = window.location.pathname.split('/');
@@ -185,19 +178,19 @@ class CodeOwnersAnalyzer {
             // Try to get the content from the current page
             const codeownersContent = await this.extractCodeOwnersFromPage();
             if (codeownersContent) {
-                console.log('Found CODEOWNERS content in page');
+                this.log('Found CODEOWNERS content in page');
                 this.parseCodeowners(codeownersContent);
                 return;
             }
 
             // If that fails, try to get it from the repository directly
             const codeownersUrl = `https://github.com/${org}/${repo}/raw/develop/.github/CODEOWNERS`;
-            console.log('Trying to fetch from:', codeownersUrl);
-            
+            this.log('Trying to fetch from:', codeownersUrl);
+
             const response = await fetch(codeownersUrl);
             if (response.ok) {
                 const content = await response.text();
-                console.log('Found CODEOWNERS content:', content.substring(0, 200));
+                this.log('Found CODEOWNERS content:', content.substring(0, 200));
                 this.parseCodeowners(content);
                 return;
             }
@@ -215,7 +208,7 @@ class CodeOwnersAnalyzer {
 
         // Look for .github/CODEOWNERS file in the tree
         const fileLinks = Array.from(fileTree.querySelectorAll('.file-info'));
-        const codeownersFile = fileLinks.find(link => 
+        const codeownersFile = fileLinks.find(link =>
             link.getAttribute('data-path')?.endsWith('.github/CODEOWNERS')
         );
 
@@ -258,16 +251,16 @@ class CodeOwnersAnalyzer {
         try {
             const response = await fetch(url);
             if (!response.ok) return null;
-            
+
             const html = await response.text();
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
-            
+
             // Try to get content from blob wrapper
             const lines = Array.from(doc.querySelectorAll('.blob-code-inner'))
                 .map(el => el.textContent)
                 .join('\n');
-                
+
             return lines || null;
         } catch (error) {
             console.error('Error fetching file content:', error);
@@ -276,61 +269,61 @@ class CodeOwnersAnalyzer {
     }
 
     parseCodeowners(content) {
-        console.log('Parsing CODEOWNERS content...');
+        this.log('Parsing CODEOWNERS content...');
         this.codeownersMap.clear();
-        
+
         if (!content) {
             console.error('No content to parse');
             return;
         }
-        
+
         const lines = content.split('\n');
         for (const line of lines) {
             if (line.startsWith('#') || !line.trim()) continue;
-            
+
             const [pattern, ...owners] = line.trim().split(/\s+/);
-            console.log('Processing pattern:', pattern, 'owners:', owners);
-            
+            this.log('Processing pattern:', pattern, 'owners:', owners);
+
             if (!pattern || owners.length === 0) continue;
-            
+
             try {
                 // Convert GitHub glob pattern to regex
                 // Store the original pattern for specificity calculations
                 const originalPattern = pattern;
-                
+
                 // Special handling for file extension patterns like **/*.graphql
                 let cleanPattern;
                 const fileExtensionMatch = pattern.match(/\/\*\*\/\*\.([a-zA-Z0-9]+)$/);
-                
+
                 if (fileExtensionMatch) {
                     // This is a pattern like /path/**/*.graphql
                     const extension = fileExtensionMatch[1];
                     const basePath = pattern.substring(0, pattern.indexOf('/**/'));
-                    
+
                     // Create a regex that matches any file with this extension in any subdirectory
                     cleanPattern = basePath.replace(/[.+?^${}()|[\]\\]/g, '\\$&') // escape special characters
-                        .replace(/^\//,'') // remove leading slash
+                        .replace(/^\//, '') // remove leading slash
                         + '(?:/.*)?\\.' + extension + '$';
-                    
-                    console.log(`Special extension pattern ${pattern} converted to: ${cleanPattern}`);
+
+                    this.log(`Special extension pattern ${pattern} converted to: ${cleanPattern}`);
                 } else if (pattern.includes('**/')) {
                     // Handle **/ pattern to match any number of directory levels
                     cleanPattern = pattern
                         .replace(/[.+?^${}()|[\]\\]/g, '\\$&') // escape special characters
                         .replace(/\*\*\//g, '(?:.*/)?') // convert **/ to match any number of directories
                         .replace(/\*/g, '[^/]*') // convert remaining * to [^/]*
-                        .replace(/^\//,'') // remove leading slash
-                        .replace(/\/$/,''); // remove trailing slash
+                        .replace(/^\//, '') // remove leading slash
+                        .replace(/\/$/, ''); // remove trailing slash
                 } else {
                     cleanPattern = pattern
                         .replace(/[.+?^${}()|[\]\\]/g, '\\$&') // escape special characters
                         .replace(/\*\*/g, '.*') // convert ** to .*
                         .replace(/\*/g, '[^/]*') // convert * to [^/]*
-                        .replace(/^\//,'') // remove leading slash
-                        .replace(/\/$/,''); // remove trailing slash
+                        .replace(/^\//, '') // remove leading slash
+                        .replace(/\/$/, ''); // remove trailing slash
                 }
-                
-                console.log('Converted pattern:', pattern, 'to regex:', cleanPattern);
+
+                this.log('Converted pattern:', pattern, 'to regex:', cleanPattern);
                 const regex = new RegExp(`^${cleanPattern}`);
                 owners.forEach(owner => {
                     if (!this.codeownersMap.has(owner)) {
@@ -344,20 +337,20 @@ class CodeOwnersAnalyzer {
                 console.error('Failed to create regex for pattern:', pattern, error);
             }
         }
-        
-        console.log('Finished parsing. Found owners:', Array.from(this.codeownersMap.keys()));
-        
+
+        this.log('Finished parsing. Found owners:', Array.from(this.codeownersMap.keys()));
+
         this._parsedPatterns = this.codeownersMap;
         return this.codeownersMap;
     }
 
     observeFileChanges() {
-        console.log('Setting up file change observer...');
+        this.log('Setting up file change observer...');
         // Wait for the file list to be available
         const waitForFiles = () => {
             const fileList = document.querySelector('.js-diff-progressive-container');
             if (!fileList) {
-                console.log('File list not found, retrying in 1s...');
+                this.log('File list not found, retrying in 1s...');
                 setTimeout(waitForFiles, 1000);
                 return;
             }
@@ -372,10 +365,10 @@ class CodeOwnersAnalyzer {
                     // Check if nodes were added/removed
                     if (mutation.addedNodes.length > 0 || mutation.removedNodes.length > 0) {
                         // Verify the changes are file-related
-                        return Array.from(mutation.addedNodes).some(node => 
+                        return Array.from(mutation.addedNodes).some(node =>
                             node.classList?.contains('file') ||
                             node.querySelector?.('.file')
-                        ) || Array.from(mutation.removedNodes).some(node => 
+                        ) || Array.from(mutation.removedNodes).some(node =>
                             node.classList?.contains('file') ||
                             node.querySelector?.('.file')
                         );
@@ -384,23 +377,23 @@ class CodeOwnersAnalyzer {
                 });
 
                 if (relevantChanges) {
-                    console.log('File changes detected - updating file list');
+                    this.log('File changes detected - updating file list');
                     this.updateChangedFiles();
-                    
+
                     // Check if all files are loaded
                     const filesCounter = document.querySelector('#files_tab_counter');
                     const expectedCount = parseInt(filesCounter?.getAttribute('title') || '0');
                     const currentCount = document.querySelectorAll('.file').length;
-                    
+
                     if (currentCount >= expectedCount && expectedCount > 0) {
-                        console.log('All files loaded, disconnecting observer');
+                        this.log('All files loaded, disconnecting observer');
                         observer.disconnect();
                     }
                 }
             });
 
-            observer.observe(fileList, { 
-                childList: true, 
+            observer.observe(fileList, {
+                childList: true,
                 subtree: true
             });
         };
@@ -409,59 +402,57 @@ class CodeOwnersAnalyzer {
     }
 
     async updateChangedFiles() {
-        this.log('Updating changed files...', 'info');
-        
+        this.log('Updating changed files...');
+
         // Reset tracking sets
         this.filesWithOwners = new Set();
         this.filesWithoutOwners = new Set();
-        
+
         // Wait for the progressive loading to complete
         await this.waitForAllFiles();
-        
+
         const files = document.querySelectorAll('.file');
         this.changedFiles.clear();
-        
-        this.log(`Processing ${files.length} files...`, 'info');
-        
+
+        this.log(`Processing ${files.length} files...`);
+
         // Process files in smaller batches for better performance with large PRs
         const BATCH_SIZE = 20;
         let processed = 0;
-        
+
         const processNextBatch = () => {
             const batch = Array.from(files).slice(processed, processed + BATCH_SIZE);
-            
+
             batch.forEach(file => {
                 // Try multiple selectors to find the file path
                 const fileHeader = file.querySelector('.file-header');
-                const path = fileHeader?.getAttribute('data-path') || 
-                            file.querySelector('.file-info a')?.getAttribute('title') ||
-                            file.querySelector('.file-info')?.getAttribute('data-path');
-                
+                const path = fileHeader?.getAttribute('data-path') ||
+                    file.querySelector('.file-info a')?.getAttribute('title') ||
+                    file.querySelector('.file-info')?.getAttribute('data-path');
+
                 if (path) {
-                    if (this.DEBUG_MODE) {
-                        this.log('Found changed file:', path, 'debug');
-                    }
+                    this.log('Found changed file:', path);
                     this.changedFiles.add(path);
                 } else {
-                    this.log('Could not find path for file:', file.innerHTML, 'warn');
+                    this.log('Could not find path for file:', file.innerHTML);
                 }
             });
-            
+
             processed += batch.length;
-            
+
             // If there are more files to process, schedule the next batch
             if (processed < files.length) {
                 setTimeout(processNextBatch, 0); // Use setTimeout to avoid blocking the UI
             } else {
-                this.log('Total files found:', this.changedFiles.size, 'info');
-                
+                this.log('Total files found:', this.changedFiles.size);
+
                 // Only update UI if we have files and this is not the initial load
                 if (this.changedFiles.size > 0) {
                     this.updateUI();
                 }
             }
         };
-        
+
         // Start processing the first batch
         processNextBatch();
     }
@@ -472,76 +463,76 @@ class CodeOwnersAnalyzer {
                 const progressiveContainer = document.querySelector('.js-diff-progressive-container');
                 const loadingIndicator = document.querySelector('.js-diff-progressive-spinner');
                 const fileCount = document.querySelectorAll('.file').length;
-                
+
                 // Get file count from the Files tab counter
                 const filesCounter = document.querySelector('#files_tab_counter');
                 const expectedCount = parseInt(filesCounter?.getAttribute('title') || '0');
 
-                console.log(`Waiting for files to load... Current: ${fileCount}, Expected: ${expectedCount}, Counter: "${filesCounter?.getAttribute('title')}"`);
-                
+                this.log(`Waiting for files to load... Current: ${fileCount}, Expected: ${expectedCount}, Counter: "${filesCounter?.getAttribute('title')}"`);
+
                 if (!loadingIndicator && (!progressiveContainer || fileCount === expectedCount)) {
                     if (fileCount === 0 || expectedCount === 0) {
                         // If we got 0 files or expected count, wait a bit longer and try again
                         setTimeout(checkForLoadingIndicator, 500);
                         return;
                     }
-                    console.log('All files loaded');
+                    this.log('All files loaded');
                     resolve();
                 } else {
                     setTimeout(checkForLoadingIndicator, 100);
                 }
             };
-            
+
             checkForLoadingIndicator();
         });
     }
 
     async getApprovedReviewers() {
         const approvedReviewers = new Set();
-        
+
         try {
             const prMatch = window.location.pathname.match(/\/pull\/(\d+)/);
             const prNumber = prMatch ? prMatch[1] : '';
             const pathParts = window.location.pathname.split('/');
             const org = pathParts[1];
             const repo = pathParts[2];
-            
-            console.log('Fetching approvals for PR:', { org, repo, prNumber });
+
+            this.log('Fetching approvals for PR:', { org, repo, prNumber });
             if (!prNumber) {
                 console.error('Could not extract PR number from URL');
                 return approvedReviewers;
             }
-            
+
             // Fetch the conversation page
             const response = await fetch(`https://github.com/${org}/${repo}/pull/${prNumber}`);
             if (!response.ok) {
                 console.error('Failed to fetch conversation page:', response.status);
                 return approvedReviewers;
             }
-            
+
             const text = await response.text();
             const parser = new DOMParser();
             const doc = parser.parseFromString(text, 'text/html');
-            
+
             // Find all review items
             const reviewItems = doc.querySelectorAll('.js-timeline-item');
-            console.log('Found timeline items:', reviewItems.length);
-            
+            this.log('Found timeline items:', reviewItems.length);
+
             reviewItems.forEach(item => {
                 // Look for approval indicators
-                const hasApproval = item.querySelector('.octicon-check.color-fg-success') || 
-                                  item.querySelector('[title*="approved these changes"]') ||
-                                  item.textContent.includes('approved these changes');
-                
+                const hasApproval = item.querySelector('.octicon-check.color-fg-success') ||
+                    item.querySelector('[title*="approved these changes"]') ||
+                    item.textContent.includes('approved these changes');
+
                 if (hasApproval) {
                     // Try multiple ways to find the reviewer
-                    const reviewer = item.querySelector('.author') || 
-                                   item.querySelector('.Link--primary') ||
-                                   item.querySelector('[data-hovercard-type="user"]');
-                    
+                    const reviewer = item.querySelector('.author') ||
+                        item.querySelector('.Link--primary') ||
+                        item.querySelector('[data-hovercard-type="user"]');
+
                     if (reviewer) {
                         const reviewerName = '@' + reviewer.textContent.trim();
-                        console.log('Found approval from:', reviewerName);
+                        this.log('Found approval from:', reviewerName);
                         approvedReviewers.add(reviewerName);
                     }
                 }
@@ -557,7 +548,7 @@ class CodeOwnersAnalyzer {
                         const reviewer = summaryItem.querySelector('.Link--primary, .author, [data-hovercard-type="user"]');
                         if (reviewer) {
                             const reviewerName = '@' + reviewer.textContent.trim();
-                            console.log('Found approval in summary from:', reviewerName);
+                            this.log('Found approval in summary from:', reviewerName);
                             approvedReviewers.add(reviewerName);
                         }
                     }
@@ -567,23 +558,23 @@ class CodeOwnersAnalyzer {
             // Also check the PR header for approved reviews
             const headerReviews = doc.querySelectorAll('.pull-header-participating .participation-avatars .avatar');
             headerReviews.forEach(avatar => {
-                const isApproved = avatar.closest('.approved') || 
-                                 avatar.getAttribute('title')?.includes('approved');
+                const isApproved = avatar.closest('.approved') ||
+                    avatar.getAttribute('title')?.includes('approved');
                 if (isApproved) {
                     const reviewer = avatar.getAttribute('alt')?.replace('@', '');
                     if (reviewer) {
                         const reviewerName = '@' + reviewer;
-                        console.log('Found approval in header from:', reviewerName);
+                        this.log('Found approval in header from:', reviewerName);
                         approvedReviewers.add(reviewerName);
                     }
                 }
             });
 
-            console.log('Final approved reviewers:', Array.from(approvedReviewers));
+            this.log('Final approved reviewers:', Array.from(approvedReviewers));
         } catch (error) {
             console.error('Failed to get approved reviewers:', error);
         }
-        
+
         return approvedReviewers;
     }
 
@@ -592,12 +583,12 @@ class CodeOwnersAnalyzer {
         if (this._fileOwnersCache && this._fileOwnersCache[filePath]) {
             return this._fileOwnersCache[filePath];
         }
-        
+
         // Initialize cache if not exists
         if (!this._fileOwnersCache) {
             this._fileOwnersCache = {};
         }
-        
+
         const owners = new Set();
         let mostSpecificPattern = '';
         let mostSpecificOwners = new Set();
@@ -621,10 +612,8 @@ class CodeOwnersAnalyzer {
         patternMap.forEach((patternOwners, patternStr) => {
             // Calculate specificity score
             const specificityScore = this.calculatePatternSpecificity(patternStr, filePath);
-            if (this.DEBUG_MODE) {
-                this.log(`Pattern ${patternStr} for file ${filePath} has specificity score: ${specificityScore}`, 'debug');
-            }
-            
+            this.log(`Pattern ${patternStr} for file ${filePath} has specificity score: ${specificityScore}`);
+
             if (specificityScore > highestSpecificityScore) {
                 highestSpecificityScore = specificityScore;
                 mostSpecificPattern = patternStr;
@@ -637,19 +626,17 @@ class CodeOwnersAnalyzer {
             mostSpecificOwners.forEach(owner => owners.add(owner));
         }
 
-        if (this.DEBUG_MODE || owners.size === 0) {
-            this.log(`Found ${owners.size} owners for file ${filePath} (pattern: ${mostSpecificPattern}, score: ${highestSpecificityScore}):`, 
-                     owners.size > 0 ? 'info' : 'warn', 
-                     Array.from(owners));
+        if (owners.size === 0) {
+            this.log(`Found ${owners.size} owners for file ${filePath} (pattern: ${mostSpecificPattern}, score: ${highestSpecificityScore}):`, Array.from(owners));
         }
-        
+
         // Track the file in the appropriate set
         if (owners.size > 0) {
             this.filesWithOwners.add(filePath);
         } else {
             this.filesWithoutOwners.add(filePath);
         }
-        
+
         // Cache the result before returning
         this._fileOwnersCache[filePath] = owners;
         return owners;
@@ -658,75 +645,65 @@ class CodeOwnersAnalyzer {
     calculatePatternSpecificity(patternStr, filePath) {
         // Higher scores mean more specific patterns
         let score = 0;
-        
+
         // Extract file extension from file path
         const fileExtension = filePath.split('.').pop();
-        
+
         // Special handling for **/*.ext patterns - these should have the highest priority for matching files
-        if (patternStr.match(/\/\*\*\/\*\.[a-zA-Z0-9]+$/) && 
+        if (patternStr.match(/\/\*\*\/\*\.[a-zA-Z0-9]+$/) &&
             patternStr.endsWith('*.' + fileExtension)) {
             score += 1000; // Super high boost for exact file extension pattern match
-            if (this.DEBUG_MODE) {
-                this.log(`EXTENSION MATCH: Added 1000 points for ${patternStr} matching file with extension ${fileExtension}`, 'debug');
-            }
+            this.log(`EXTENSION MATCH: Added 1000 points for ${patternStr} matching file with extension ${fileExtension}`);
         }
-        
+
         // For general file extension pattern matches without **
         else if (fileExtension && patternStr.includes('.' + fileExtension)) {
             score += 100;
-            if (this.DEBUG_MODE) {
-                this.log(`Added 100 points for pattern with extension .${fileExtension}`, 'debug');
-            }
+            this.log(`Added 100 points for pattern with extension .${fileExtension}`);
         }
-        
+
         // For patterns with * wildcards matching file extensions
         if (patternStr.includes('*.' + fileExtension)) {
             score += 50;
-            if (this.DEBUG_MODE) {
-                this.log(`Added 50 points for *.${fileExtension} pattern match`, 'debug');
-            }
+            this.log(`Added 50 points for *.${fileExtension} pattern match`);
         }
-        
+
         // REDUCED PENALTY - If the pattern is a directory pattern and not a file pattern
         if ((patternStr.endsWith('/') || !patternStr.includes('.')) && fileExtension) {
             score -= 5; // Small penalty
-            if (this.DEBUG_MODE) {
-                this.log(`Minor penalty: Reduced 5 points for directory pattern ${patternStr} matching a file with extension`, 'debug');
-            }
+            this.log(`Minor penalty: Reduced 5 points for directory pattern ${patternStr} matching a file with extension`);
         }
-        
+
         // START WITH A BASE SCORE to avoid negative values
         score += 10;
-        
+
         // Count path segments (more segments = more specific)
         const segments = patternStr.split('/').filter(s => s.length > 0);
         const segmentScore = segments.length * 5;
         score += segmentScore;
-        
+
         // Add points for exact match segments (those without wildcards)
         const exactSegments = segments.filter(s => !s.includes('*')).length;
         const exactSegmentScore = exactSegments * 5;
         score += exactSegmentScore;
-        
+
         // Path depth - boost score if pattern matches the specific directory structure
         const pathSegments = filePath.split('/');
         let matchingSegments = 0;
-        
+
         for (let i = 0; i < Math.min(segments.length, pathSegments.length); i++) {
             if (segments[i] === pathSegments[i]) {
                 matchingSegments++;
             }
         }
-        
+
         score += matchingSegments * 5;
-        
+
         // Smaller penalty for wildcards
         const wildcardCount = (patternStr.match(/\*/g) || []).length;
         score -= wildcardCount;  // Reduced from wildcardCount * 2 to just wildcardCount
-        
-        if (this.DEBUG_MODE) {
-            this.log(`Final score for pattern ${patternStr} with file ${filePath}: ${score}`, 'debug');
-        }
+
+        this.log(`Final score for pattern ${patternStr} with file ${filePath}: ${score}`);
         return score;
     }
 
@@ -736,11 +713,11 @@ class CodeOwnersAnalyzer {
             const authorElement = document.querySelector('.gh-header-meta .author');
             if (authorElement) {
                 const author = '@' + authorElement.textContent.trim();
-                console.log('Found PR author:', author);
+                this.log('Found PR author:', author);
                 return author;
             }
 
-            console.warn('Could not find PR author');
+            this.log('Could not find PR author');
             return null;
         } catch (error) {
             console.error('Error getting PR author:', error);
@@ -751,11 +728,11 @@ class CodeOwnersAnalyzer {
     analyzeOwnership() {
         const fullCoverageOwners = new Set();
         const ownerToFiles = new Map();
-        this.log('Analyzing ownership for files:', this.DEBUG_MODE ? 'info' : 'debug', Array.from(this.changedFiles));
+        this.log('Analyzing ownership for files:', Array.from(this.changedFiles));
 
         // Get PR author to exclude them
         const prAuthor = this.prAuthor;
-        this.log('PR author to exclude:', 'info', prAuthor);
+        this.log('PR author to exclude:', prAuthor);
 
         // Map owners to their covered files and track files that have owners
         this.changedFiles.forEach(file => {
@@ -770,8 +747,8 @@ class CodeOwnersAnalyzer {
                     }
                     ownerToFiles.get(owner).add(file);
                 });
-            } else if (this.DEBUG_MODE) {
-                this.log(`File ${file} has no owners - will be ignored for coverage`, 'debug');
+            } else {
+                this.log(`File ${file} has no owners - will be ignored for coverage`);
             }
         });
 
@@ -782,15 +759,12 @@ class CodeOwnersAnalyzer {
             }
         });
 
-        if (this.DEBUG_MODE) {
-            this.log('Owner to files mapping:', 'debug', 
-                    Object.fromEntries([...ownerToFiles].map(([k, v]) => [k, Array.from(v)])));
-        }
-        this.log('Full coverage owners:', 'info', Array.from(fullCoverageOwners));
+        this.log('Owner to files mapping:', Object.fromEntries([...ownerToFiles].map(([k, v]) => [k, Array.from(v)])));
+        this.log('Full coverage owners:', Array.from(fullCoverageOwners));
 
         // Find combined sets of owners for full coverage
         const combinedSets = this.findCombinedOwnerSet(ownerToFiles);
-        this.log('Combined Coverage Sets:', 'info', combinedSets);
+        this.log('Combined Coverage Sets:', combinedSets);
 
         return {
             fullCoverageOwners: Array.from(fullCoverageOwners),
@@ -805,11 +779,9 @@ class CodeOwnersAnalyzer {
 
     findCombinedOwnerSet(ownerToFiles) {
         const owners = Array.from(ownerToFiles.keys());
-        
-        if (this.DEBUG_MODE) {
-            this.log('Finding combined set for files:', 'debug', Array.from(this.filesWithOwners));
-            this.log('Available owners:', 'debug', owners);
-        }
+
+        this.log('Finding combined set for files:', Array.from(this.filesWithOwners));
+        this.log('Available owners:', owners);
 
         // First find owners with full coverage
         const fullCoverageOwners = new Set();
@@ -823,17 +795,17 @@ class CodeOwnersAnalyzer {
         });
 
         // Remove full coverage owners and PR author from consideration
-        const partialOwners = owners.filter(owner => 
+        const partialOwners = owners.filter(owner =>
             !fullCoverageOwners.has(owner) && owner !== this.prAuthor
         );
-        
+
         if (partialOwners.length === 0) {
-            this.log('No partial coverage owners found', 'info');
+            this.log('No partial coverage owners found');
             return [];
         }
 
         let combinedSets = [];
-        
+
         // Cache owner file coverage for better performance
         const ownerCoverage = new Map();
         partialOwners.forEach(owner => {
@@ -866,37 +838,38 @@ class CodeOwnersAnalyzer {
             }
             return false;
         };
-                
+
         combinationLoop:
-        for (let i = 1; i <= Math.min(this.MAX_COMBINATION_SIZE, partialOwners.length); i++) {
-            this.log(`Trying combinations of ${i} partial owners...`, 'info');
-            
+        // Start from 2 instead of 1 since single owners with full coverage are already identified
+        for (let i = 2; i <= Math.min(this.MAX_COMBINATION_SIZE, partialOwners.length); i++) {
+            this.log(`Trying combinations of ${i} partial owners...`);
+
             // Optimization: Avoid generating all combinations at once
             // Instead, generate and process them one by one
             const combinations = this.getCombinations(partialOwners, i);
-            
+
             for (const combination of combinations) {
                 // Exit early if we've found enough combinations
                 if (combinedSets.length >= this.MAX_COMBINATIONS_TO_SHOW) {
-                    this.log(`Reached maximum of ${this.MAX_COMBINATIONS_TO_SHOW} combinations, stopping search`, 'info');
+                    this.log(`Reached maximum of ${this.MAX_COMBINATIONS_TO_SHOW} combinations, stopping search`);
                     break combinationLoop;
                 }
-                
+
                 // Skip this combination if it's a superset of an existing valid combination
                 if (isRedundantCombination(combination)) {
                     // Only log occasionally to reduce console spam
                     if (this.DEBUG_MODE && Math.random() < 0.01) {
-                        this.log(`Skipping redundant combination: ${combination}`, 'debug');
+                        this.log(`Skipping redundant combination: ${combination}`);
                     }
                     continue;
                 }
-                
+
                 const coverage = getCoverage(combination);
-                
+
                 // Add combinations that provide full coverage
                 if (coverage.size === this.filesWithOwners.size) {
                     combinedSets.push(combination);
-                    this.log('Found valid combination:', 'info', combination);
+                    this.log('Found valid combination:', combination);
                 }
             }
         }
@@ -905,38 +878,38 @@ class CodeOwnersAnalyzer {
         combinedSets.sort((a, b) => {
             // First sort by length
             if (a.length !== b.length) return a.length - b.length;
-            
+
             // Then by approved status count (combinations with more approved reviewers first)
             const aApprovedCount = a.filter(owner => this.approvedReviewers?.has(owner)).length;
             const bApprovedCount = b.filter(owner => this.approvedReviewers?.has(owner)).length;
             return bApprovedCount - aApprovedCount;
         });
-        
+
         return combinedSets;
     }
 
     getCombinations(arr, k) {
         const combinations = [];
-        
+
         function backtrack(start, combination) {
             if (combination.length === k) {
                 combinations.push([...combination]);
                 return;
             }
-            
+
             for (let i = start; i < arr.length; i++) {
                 combination.push(arr[i]);
                 backtrack(i + 1, combination);
                 combination.pop();
             }
         }
-        
+
         backtrack(0, []);
         return combinations;
     }
 
     createUI() {
-        console.log('Creating UI panel...');
+        this.log('Creating UI panel...');
         // Remove existing panel if any
         removeUI();
 
@@ -1003,7 +976,7 @@ class CodeOwnersAnalyzer {
             border-bottom-right-radius: 6px;
             flex-shrink: 0;
         `;
-        
+
         // Add a span for the status text
         const statusText = document.createElement('span');
         statusText.id = 'status-text';
@@ -1058,7 +1031,7 @@ class CodeOwnersAnalyzer {
                 contentWrapper.style.display = contentWrapper.style.display === 'none' ? 'block' : 'none';
                 statusBar.style.display = statusBar.style.display === 'none' ? 'block' : 'none';
                 panel.classList.toggle('collapsed');
-                collapseBtn.querySelector('svg').style.transform = 
+                collapseBtn.querySelector('svg').style.transform =
                     contentWrapper.style.display === 'none' ? 'rotate(-90deg)' : 'rotate(0deg)';
             });
         }
@@ -1069,12 +1042,12 @@ class CodeOwnersAnalyzer {
     }
 
     showLoading(contentArea) {
-        this.log('Showing loading state...', 'info');
+        this.log('Showing loading state...');
         if (!contentArea) {
-            this.log('No content area provided to showLoading', 'error');
+            this.log('No content area provided to showLoading');
             return;
         }
-        
+
         // Fix SVG path error by using a correct SVG spinner
         contentArea.innerHTML = `
             <div class="d-flex flex-column">
@@ -1092,23 +1065,22 @@ class CodeOwnersAnalyzer {
     }
 
     showResults(fullCoverageOwners, combinedSets, approvedReviewers, fileStats) {
-        this.log('Showing results with approvals:', this.DEBUG_MODE ? 'info' : 'debug', { 
-            fullCoverageOwners, 
-            combinedSets, 
+        this.log('Showing results with approvals:', {
+            fullCoverageOwners,
+            combinedSets,
             approvedReviewers: Array.from(approvedReviewers),
             fileStats
         });
         const contentArea = document.getElementById('code-owners-content');
         if (!contentArea) {
-            this.log('Could not find content area to update', 'error');
+            this.log('Could not find content area to update');
             return;
         }
 
+        this.log('Approved reviewers:', Array.from(approvedReviewers));
+
         const createOwnerElement = (owner) => {
             const isApproved = approvedReviewers.has(owner);
-            if (this.DEBUG_MODE) {
-                this.log(`Owner ${owner} approved status:`, 'debug', isApproved);
-            }
             const username = owner.substring(1); // Remove @ symbol
             return `
                 <li>
@@ -1123,9 +1095,6 @@ class CodeOwnersAnalyzer {
             return `<span class="combined-set">` + owners.map(owner => {
                 const isApproved = approvedReviewers.has(owner);
                 const username = owner.substring(1); // Remove @ symbol
-                if (this.DEBUG_MODE) {
-                    this.log(`Combined set owner ${owner} approved status:`, 'debug', isApproved);
-                }
                 return `
                     <span class="d-inline-flex flex-items-center">
                         <img src="https://github.com/${username}.png" alt="${username}" 
@@ -1156,9 +1125,9 @@ class CodeOwnersAnalyzer {
                         </div>
                     </div>
                     <ul id="full-coverage-list" class="owners-list">
-                        ${fullCoverageOwners.length 
-                            ? fullCoverageOwners.map(createOwnerElement).join('')
-                            : '<li class="color-fg-muted">No owners with full coverage</li>'}
+                        ${fullCoverageOwners.length
+                ? fullCoverageOwners.map(createOwnerElement).join('')
+                : '<li class="color-fg-muted">No owners with full coverage</li>'}
                     </ul>
                 </div>
                 <div class="section">
@@ -1179,13 +1148,13 @@ class CodeOwnersAnalyzer {
                         </div>
                     </div>
                     <ul id="combined-coverage-list" class="owners-list">
-                        ${combinedSets.length 
-                            ? combinedSets.map((set, index) => `
+                        ${combinedSets.length
+                ? combinedSets.map((set, index) => `
                                 ${index > 0 ? `<li class="border-top color-border-muted"></li>` : ''}
                                 <li class="py-2">
                                     ${createCombinedSetElement(set)}
                                 </li>`).join('')
-                            : '<li class="color-fg-muted">No Combined Coverage Sets found</li>'}
+                : '<li class="color-fg-muted">No Combined Coverage Sets found</li>'}
                     </ul>
                 </div>
             </div>
@@ -1194,7 +1163,7 @@ class CodeOwnersAnalyzer {
         // Update the status bar with simplified text
         const statusText = document.getElementById('status-text');
         // Only show "has owners" count if not all files have owners
-        const statusBarText = fileStats.withOwners < fileStats.total 
+        const statusBarText = fileStats.withOwners < fileStats.total
             ? `Processed ${fileStats.total} files (${fileStats.withOwners} has owners)`
             : `Processed ${fileStats.total} files`;
         statusText.textContent = statusBarText;
@@ -1234,11 +1203,11 @@ class CodeOwnersAnalyzer {
         // Add tooltip functionality
         contentArea.querySelectorAll('.tooltip-container').forEach(container => {
             const tooltip = container.querySelector('.tooltip');
-            
+
             container.addEventListener('mouseenter', (e) => {
                 const rect = container.getBoundingClientRect();
                 tooltip.style.bottom = (window.innerHeight - rect.top + 10) + 'px';
-                tooltip.style.left = (rect.left + rect.width/2) + 'px';
+                tooltip.style.left = (rect.left + rect.width / 2) + 'px';
             });
         });
 
@@ -1249,13 +1218,13 @@ class CodeOwnersAnalyzer {
         contentArea.querySelectorAll('.owners-list li a').forEach(ownerLink => {
             const owner = ownerLink.textContent;
             const ownerFiles = this.getOwnerFiles(owner);
-            
+
             ownerLink.parentElement.addEventListener('mouseenter', () => {
                 if (ownerFiles) {
                     statusText.textContent = `${owner} owns ${ownerFiles.size}/${fileStats.withOwners} files with owners`;
                 }
             });
-            
+
             ownerLink.parentElement.addEventListener('mouseleave', () => {
                 statusText.textContent = baseStatusText;
             });
@@ -1267,13 +1236,13 @@ class CodeOwnersAnalyzer {
             if (ownerLink) {
                 const owner = ownerLink.textContent;
                 const ownerFiles = this.getOwnerFiles(owner);
-                
+
                 ownerElement.addEventListener('mouseenter', () => {
                     if (ownerFiles) {
                         statusText.textContent = `${owner} owns ${ownerFiles.size}/${fileStats.withOwners} files`;
                     }
                 });
-                
+
                 ownerElement.addEventListener('mouseleave', () => {
                     statusText.textContent = baseStatusText;
                 });
@@ -1282,21 +1251,21 @@ class CodeOwnersAnalyzer {
     }
 
     async updateUI() {
-        this.log('Updating UI...', 'info');
+        this.log('Updating UI...');
         const contentArea = document.getElementById('code-owners-content');
         this.showLoading(contentArea);
 
         try {
             // Get approved reviewers
             const approvedReviewers = await this.getApprovedReviewers();
-            
+
             // Analyze ownership
             const { fullCoverageOwners, combinedSets, fileStats } = this.analyzeOwnership();
-            
+
             // Update UI with results
             this.showResults(fullCoverageOwners, combinedSets, approvedReviewers, fileStats);
         } catch (error) {
-            this.log('Error updating UI:', 'error', error);
+            console.error('Error updating UI:', error);
             if (contentArea) {
                 contentArea.innerHTML = `<div class="error-message">Error analyzing code owners: ${error.message}</div>`;
             }
@@ -1323,7 +1292,7 @@ class CodeOwnersAnalyzer {
                 combinedSets: []
             };
         }
-        
+
         // ... existing combinatorial analysis ...
     }
 }
@@ -1334,7 +1303,7 @@ function removeUI(fromCloseButton = false) {
     if (existingPanel) {
         existingPanel.remove();
     }
-    
+
     // Only set the session flag when explicitly closed with the X button
     if (fromCloseButton) {
         sessionStorage.setItem('codeOwnersPanelClosed', 'true');
@@ -1381,18 +1350,18 @@ async function initializeAnalyzer() {
         console.log('Initialization already in progress, skipping');
         return;
     }
-    
+
     isInitializing = true;
-    
+
     try {
         // Clear the session flag on extension initialization
         if (document.readyState === 'complete') {
             sessionStorage.removeItem('codeOwnersPanelClosed');
         }
-        
+
         // Check if extension is enabled before doing anything
         const { enabled } = await safeStorageGet(['enabled']);
-        
+
         // Default to enabled if we couldn't access storage
         if (enabled === null) {
             console.log('Could not access storage, assuming extension is enabled');
@@ -1401,7 +1370,7 @@ async function initializeAnalyzer() {
             isInitializing = false;
             return;
         }
-        
+
         const analyzer = new CodeOwnersAnalyzer();
         await analyzer.initialize();
     } catch (error) {
@@ -1418,12 +1387,12 @@ let lastUrlWithoutFragment = location.href.split('#')[0];
 async function handleUrlChange() {
     const url = location.href;
     const urlWithoutFragment = url.split('#')[0];
-    
+
     // Only consider it a navigation if the base URL changes
     if (urlWithoutFragment !== lastUrlWithoutFragment) {
         lastUrl = url;
         lastUrlWithoutFragment = urlWithoutFragment;
-        
+
         if (url.includes('/files')) {
             // Wait for GitHub's content to load
             await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1454,7 +1423,7 @@ window.addEventListener('error', (event) => {
 });
 
 // Add CSS for the animation fix
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
     const style = document.createElement('style');
     style.textContent = `
         @keyframes rotate {
