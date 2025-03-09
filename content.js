@@ -870,12 +870,15 @@ class CodeOwnersAnalyzer {
             top: 100px;
             right: 30px;
             width: 280px;
+            display: flex;
+            flex-direction: column;
+            max-height: 80vh; /* Limit the panel height */
         `;
 
         // Create header with close button
         const header = document.createElement('div');
         header.className = 'd-flex flex-items-center p-2 code-owners-header';
-        header.style.cssText = 'cursor: move;';
+        header.style.cssText = 'cursor: move; flex-shrink: 0;'; // prevent header from shrinking
         header.innerHTML = `
             <div class="flex-1" style="user-select: none;">GitHub PR Code Owners Analyzer</div>
             <div class="d-flex">
@@ -899,13 +902,40 @@ class CodeOwnersAnalyzer {
             collapseButton.click();
         });
 
-        // Create content container
+        // Create scrollable content container
+        const contentWrapper = document.createElement('div');
+        contentWrapper.className = 'scrollable-content';
+        contentWrapper.style.cssText = `
+            overflow-y: auto;
+            flex-grow: 1;
+            max-height: calc(80vh - 90px); /* Adjust for header and status bar */
+        `;
+
         const content = document.createElement('div');
         content.className = 'p-3';
         content.id = 'code-owners-content';
+        contentWrapper.appendChild(content);
+
+        // Create fixed status bar
+        const statusBar = document.createElement('div');
+        statusBar.className = 'status-bar py-1 px-2 color-bg-subtle f6 color-fg-muted';
+        statusBar.id = 'status-bar';
+        statusBar.style.cssText = `
+            border-top: 1px solid var(--color-border-muted);
+            border-bottom-left-radius: 6px;
+            border-bottom-right-radius: 6px;
+            flex-shrink: 0;
+        `;
+        
+        // Add a span for the status text
+        const statusText = document.createElement('span');
+        statusText.id = 'status-text';
+        statusText.textContent = 'Loading...';
+        statusBar.appendChild(statusText);
 
         panel.appendChild(header);
-        panel.appendChild(content);
+        panel.appendChild(contentWrapper);
+        panel.appendChild(statusBar);
 
         document.body.appendChild(panel);
 
@@ -939,7 +969,6 @@ class CodeOwnersAnalyzer {
         // Add button handlers after panel is in DOM
         const closeBtn = document.getElementById('code-owners-close');
         const collapseBtn = document.getElementById('code-owners-collapse');
-        const contentArea = document.getElementById('code-owners-content');
 
         if (closeBtn) {
             closeBtn.addEventListener('click', () => {
@@ -947,17 +976,18 @@ class CodeOwnersAnalyzer {
             });
         }
 
-        if (collapseBtn && contentArea) {
+        if (collapseBtn && contentWrapper) {
             collapseBtn.addEventListener('click', () => {
-                content.style.display = content.style.display === 'none' ? 'block' : 'none';
+                contentWrapper.style.display = contentWrapper.style.display === 'none' ? 'block' : 'none';
+                statusBar.style.display = statusBar.style.display === 'none' ? 'block' : 'none';
                 panel.classList.toggle('collapsed');
                 collapseBtn.querySelector('svg').style.transform = 
-                    content.style.display === 'none' ? 'rotate(-90deg)' : 'rotate(0deg)';
+                    contentWrapper.style.display === 'none' ? 'rotate(-90deg)' : 'rotate(0deg)';
             });
         }
 
         // Show initial loading state
-        this.showLoading(contentArea);
+        this.showLoading(content);
         return panel;
     }
 
@@ -972,7 +1002,7 @@ class CodeOwnersAnalyzer {
                 <div class="color-fg-muted">
                     <div class="d-flex flex-items-center">
                         <svg style="animation: spin 1s linear infinite;" class="mr-2" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path fill-rule="evenodd" clip-rule="evenodd" d="M8 4C8.55228 4 9 3.55228 9 3C9 2.44772 8.55228 2 8 2C7.44772 2 7 2.44772 7 3C7 3.55228 7.44772 4 8 4ZM8 14C8.55228 14 9 13.5523 9 13C9 12.4477 8.55228 12 8 12C7.44772 12 7 12.4477 7 13C7 13.5523 7.44772 14 8 14ZM14 8C14 8.55228 13.5523 9 13 9C12.4477 9 12 8.55228 12 8C12 7.44772 12.4477 7 13 7C13.5523 7 14 7.44772 14 8ZM4 8C4 8.55228 3.55228 9 3 9C2.44772 9 2 8.55228 2 8C2 7.44772 2.44772 7 3 7C3.55228 7 4 7.44772 4 8Z" fill="currentColor"/>
+                            <path fill-rule="evenodd" clip-rule="evenodd" d="M8 4C8.55228 4 9 3.55228 9 3C9 2.44772 8.55228 2 8 2C7.44772 2 7 2.44772 7 3C7 3.55228 7.44772 4 8 4ZM8 14C8.55228 14 9 13.5523 9 13C9 12.4477 8.55228 12 8 12C7.44772 12 7 12.4477 7 13C7 13.5523 7.44772 14 8 14ZM14 8C14 8.55228 13.5523 9 13 9C12.4477 9 12 8.55228 12 8C12 7.44772 12.4477 7 13 7C13.5523 7 14 7.44772 14 8 14ZM4 8C4 8.55228 3.55228 9 3 9C2.44772 9 2 8.55228 2 8C2 7.44772 2.44772 7 3 7C3.55228 7 4 7.44772 4 8Z" fill="currentColor"/>
                         </svg>
                         Analyzing code ownership...
                     </div>
@@ -1073,11 +1103,12 @@ class CodeOwnersAnalyzer {
                             : '<li class="color-fg-muted">No Combined Coverage Sets found</li>'}
                     </ul>
                 </div>
-                <div class="status-bar mt-3 py-1 px-2 color-bg-subtle f6 color-fg-muted" style="border-top: 1px solid var(--color-border-muted); margin-left: -16px; margin-right: -16px; margin-bottom: -16px; border-bottom-left-radius: 6px; border-bottom-right-radius: 6px;">
-                    <span id="status-text">Processed ${this.changedFiles.size} files</span>
-                </div>
             </div>
         `;
+
+        // Update the status bar
+        const statusText = document.getElementById('status-text');
+        statusText.textContent = `Processed ${this.changedFiles.size} files`;
 
         // Add click handlers for section toggles and double-click for section titles
         contentArea.querySelectorAll('.js-section-toggle').forEach(button => {
@@ -1111,7 +1142,7 @@ class CodeOwnersAnalyzer {
             }
         }
 
-        // Add this to your showResults method after creating the UI
+        // Add tooltip functionality
         contentArea.querySelectorAll('.tooltip-container').forEach(container => {
             const tooltip = container.querySelector('.tooltip');
             
@@ -1123,7 +1154,6 @@ class CodeOwnersAnalyzer {
         });
 
         // Add hover handlers for owners to update the status bar
-        const statusText = document.getElementById('status-text');
         const baseStatusText = `Processed ${this.changedFiles.size} files`;
 
         // Add hover handlers for individual owners
