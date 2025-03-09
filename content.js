@@ -36,6 +36,10 @@ class CodeOwnersAnalyzer {
             
             console.log('PR UI elements loaded, checking state...');
 
+            // Get PR author early
+            this.prAuthor = await this.getPRAuthor();
+            console.log('PR author:', this.prAuthor);
+
             // Check if PR is merged first
             const mergeStatus = document.querySelector('.State--merged');
             if (mergeStatus) {
@@ -556,11 +560,33 @@ class CodeOwnersAnalyzer {
         return owners;
     }
 
+    async getPRAuthor() {
+        try {
+            // Use the reliable selector that works for finding the PR author
+            const authorElement = document.querySelector('.gh-header-meta .author');
+            if (authorElement) {
+                const author = '@' + authorElement.textContent.trim();
+                console.log('Found PR author:', author);
+                return author;
+            }
+
+            console.warn('Could not find PR author');
+            return null;
+        } catch (error) {
+            console.error('Error getting PR author:', error);
+            return null;
+        }
+    }
+
     analyzeOwnership() {
         const fullCoverageOwners = new Set();
         const ownerToFiles = new Map();
         const filesWithOwners = new Set();
         console.log('Analyzing ownership for files:', Array.from(this.changedFiles));
+
+        // Get PR author to exclude them
+        const prAuthor = this.prAuthor;
+        console.log('PR author to exclude:', prAuthor);
 
         // Map owners to their covered files and track files that have owners
         this.changedFiles.forEach(file => {
@@ -568,6 +594,9 @@ class CodeOwnersAnalyzer {
             if (fileOwners.size > 0) {
                 filesWithOwners.add(file);
                 fileOwners.forEach(owner => {
+                    // Skip the PR author
+                    if (owner === prAuthor) return;
+
                     if (!ownerToFiles.has(owner)) {
                         ownerToFiles.set(owner, new Set());
                     }
@@ -607,13 +636,18 @@ class CodeOwnersAnalyzer {
         // First find owners with full coverage
         const fullCoverageOwners = new Set();
         ownerToFiles.forEach((files, owner) => {
+            // Skip PR author
+            if (owner === this.prAuthor) return;
+
             if (files.size === filesWithOwners.size) {
                 fullCoverageOwners.add(owner);
             }
         });
 
-        // Remove full coverage owners from consideration
-        const partialOwners = owners.filter(owner => !fullCoverageOwners.has(owner));
+        // Remove full coverage owners and PR author from consideration
+        const partialOwners = owners.filter(owner => 
+            !fullCoverageOwners.has(owner) && owner !== this.prAuthor
+        );
         
         if (partialOwners.length === 0) {
             console.log('No partial coverage owners found');
@@ -654,8 +688,7 @@ class CodeOwnersAnalyzer {
         // Sort by combination size (smaller is better)
         combinedSets.sort((a, b) => a.length - b.length);
         
-        // Return up to 3 best combinations
-        return combinedSets.slice(0, 3);
+        return combinedSets;
     }
 
     getCombinations(arr, k) {
