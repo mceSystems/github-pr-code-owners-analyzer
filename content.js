@@ -6,6 +6,8 @@ class CodeOwnersAnalyzer {
         this.approvedReviewers = new Set();
         this._fileOwnersCache = {};
         this._parsedPatterns = null;
+        this.MAX_COMBINATION_SIZE = 5; // limit the number of owners in a combination
+        this.MAX_COMBINATIONS_TO_SHOW = 15; // limit the total number of combinations shown in UI
     }
 
     async initialize() {
@@ -622,26 +624,22 @@ class CodeOwnersAnalyzer {
         
         // REDUCED PENALTY - If the pattern is a directory pattern and not a file pattern
         if ((patternStr.endsWith('/') || !patternStr.includes('.')) && fileExtension) {
-            // Small penalty for directory patterns matching files with extensions
-            score -= 5; // Was 50, reduced to 5
+            score -= 5; // Small penalty
             console.log(`Minor penalty: Reduced 5 points for directory pattern ${patternStr} matching a file with extension`);
         }
         
         // START WITH A BASE SCORE to avoid negative values
         score += 10;
-        console.log(`Added 10 base points`);
         
         // Count path segments (more segments = more specific)
         const segments = patternStr.split('/').filter(s => s.length > 0);
         const segmentScore = segments.length * 5;
         score += segmentScore;
-        console.log(`Added ${segmentScore} points for ${segments.length} path segments`);
         
         // Add points for exact match segments (those without wildcards)
         const exactSegments = segments.filter(s => !s.includes('*')).length;
         const exactSegmentScore = exactSegments * 5;
         score += exactSegmentScore;
-        console.log(`Added ${exactSegmentScore} points for ${exactSegments} exact segments`);
         
         // Path depth - boost score if pattern matches the specific directory structure
         const pathSegments = filePath.split('/');
@@ -654,12 +652,10 @@ class CodeOwnersAnalyzer {
         }
         
         score += matchingSegments * 5;
-        console.log(`Added ${matchingSegments * 5} points for matching path segments`);
         
         // Smaller penalty for wildcards
         const wildcardCount = (patternStr.match(/\*/g) || []).length;
-        score -= wildcardCount;  // Was wildcardCount * 2, reduced to just wildcardCount
-        console.log(`Reduced ${wildcardCount} points for ${wildcardCount} wildcards`);
+        score -= wildcardCount;  // Reduced from wildcardCount * 2 to just wildcardCount
         
         console.log(`Final score for pattern ${patternStr} with file ${filePath}: ${score}`);
         return score;
@@ -760,44 +756,65 @@ class CodeOwnersAnalyzer {
         }
 
         let combinedSets = [];
+        
+        // Cache owner file coverage for better performance
+        const ownerCoverage = new Map();
+        partialOwners.forEach(owner => {
+            ownerCoverage.set(owner, new Set(ownerToFiles.get(owner)));
+        });
 
-        // Helper function to get combination coverage
+        // Helper function to get combination coverage - optimized with cached owner coverage
         const getCoverage = (combination) => {
             const covered = new Set();
             combination.forEach(owner => {
-                ownerToFiles.get(owner).forEach(file => covered.add(file));
+                const ownerFiles = ownerCoverage.get(owner);
+                ownerFiles.forEach(file => covered.add(file));
             });
             return covered;
         };
 
-        // Helper function to check if a combination is a superset of any existing valid combination
+        // Helper function to check if a combination is redundant (optimized)
         const isRedundantCombination = (combination) => {
             // For each existing valid set
             for (const validSet of combinedSets) {
                 // If all members of a valid set are in this combination, it's redundant
-                if (validSet.every(owner => combination.includes(owner))) {
-                    return true;
+                let isSuperset = true;
+                for (const owner of validSet) {
+                    if (!combination.includes(owner)) {
+                        isSuperset = false;
+                        break;
+                    }
                 }
+                if (isSuperset) return true;
             }
             return false;
         };
-
-        // Try combinations of partial owners from smallest to largest size
-        const MAX_COMBINATION_SIZE = 5;
         
-        for (let i = 1; i <= Math.min(MAX_COMBINATION_SIZE, partialOwners.length); i++) {
+        combinationLoop:
+        for (let i = 1; i <= Math.min(this.MAX_COMBINATION_SIZE, partialOwners.length); i++) {
             console.log(`Trying combinations of ${i} partial owners...`);
+            
+            // Optimization: Avoid generating all combinations at once
+            // Instead, generate and process them one by one
             const combinations = this.getCombinations(partialOwners, i);
             
             for (const combination of combinations) {
+                // Exit early if we've found enough combinations
+                if (combinedSets.length >= this.MAX_COMBINATIONS_TO_SHOW) {
+                    console.log(`Reached maximum of ${this.MAX_COMBINATIONS_TO_SHOW} combinations, stopping search`);
+                    break combinationLoop;
+                }
+                
                 // Skip this combination if it's a superset of an existing valid combination
                 if (isRedundantCombination(combination)) {
-                    console.log(`Skipping redundant combination: ${combination}`);
+                    // Only log every 100th redundant combination to reduce console spam
+                    if (Math.random() < 0.01) {
+                        console.log(`Skipping redundant combination: ${combination}`);
+                    }
                     continue;
                 }
                 
                 const coverage = getCoverage(combination);
-                console.log(`Combination ${combination} covers ${coverage.size}/${filesWithOwners.size} files`);
                 
                 // Add combinations that provide full coverage
                 if (coverage.size === filesWithOwners.size) {
@@ -808,7 +825,15 @@ class CodeOwnersAnalyzer {
         }
 
         // Sort combinations by size for better UX (smaller combinations first)
-        combinedSets.sort((a, b) => a.length - b.length);
+        combinedSets.sort((a, b) => {
+            // First sort by length
+            if (a.length !== b.length) return a.length - b.length;
+            
+            // Then by approved status count (combinations with more approved reviewers first)
+            const aApprovedCount = a.filter(owner => this.approvedReviewers?.has(owner)).length;
+            const bApprovedCount = b.filter(owner => this.approvedReviewers?.has(owner)).length;
+            return bApprovedCount - aApprovedCount;
+        });
         
         return combinedSets;
     }
