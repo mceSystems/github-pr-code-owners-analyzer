@@ -1077,8 +1077,6 @@ class CodeOwnersAnalyzer {
             return;
         }
 
-        this.log('Approved reviewers:', Array.from(approvedReviewers));
-
         const createOwnerElement = (owner) => {
             const isApproved = approvedReviewers.has(owner);
             const username = owner.substring(1); // Remove @ symbol
