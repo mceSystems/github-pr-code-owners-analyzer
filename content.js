@@ -8,6 +8,26 @@ class CodeOwnersAnalyzer {
         this._parsedPatterns = null;
         this.MAX_COMBINATION_SIZE = 5; // limit the number of owners in a combination
         this.MAX_COMBINATIONS_TO_SHOW = 15; // limit the total number of combinations shown in UI
+        
+        // Add debug mode flag - set to false in production
+        this.DEBUG_MODE = true;
+        
+        // Track files with and without owners
+        this.filesWithOwners = new Set();
+        this.filesWithoutOwners = new Set();
+    }
+
+    // Logger function to control verbosity
+    log(message, level = 'info', ...args) {
+        if (!this.DEBUG_MODE && level === 'debug') return;
+        
+        if (level === 'error') {
+            console.error(message, ...args);
+        } else if (level === 'warn') {
+            console.warn(message, ...args);
+        } else if (this.DEBUG_MODE || level === 'info') {
+            console.log(message, ...args);
+        }
     }
 
     async initialize() {
@@ -389,7 +409,11 @@ class CodeOwnersAnalyzer {
     }
 
     async updateChangedFiles() {
-        console.log('Updating changed files...');
+        this.log('Updating changed files...', 'info');
+        
+        // Reset tracking sets
+        this.filesWithOwners = new Set();
+        this.filesWithoutOwners = new Set();
         
         // Wait for the progressive loading to complete
         await this.waitForAllFiles();
@@ -397,27 +421,49 @@ class CodeOwnersAnalyzer {
         const files = document.querySelectorAll('.file');
         this.changedFiles.clear();
         
-        files.forEach(file => {
-            // Try multiple selectors to find the file path
-            const fileHeader = file.querySelector('.file-header');
-            const path = fileHeader?.getAttribute('data-path') || 
-                        file.querySelector('.file-info a')?.getAttribute('title') ||
-                        file.querySelector('.file-info')?.getAttribute('data-path');
+        this.log(`Processing ${files.length} files...`, 'info');
+        
+        // Process files in smaller batches for better performance with large PRs
+        const BATCH_SIZE = 20;
+        let processed = 0;
+        
+        const processNextBatch = () => {
+            const batch = Array.from(files).slice(processed, processed + BATCH_SIZE);
             
-            if (path) {
-                console.log('Found changed file:', path);
-                this.changedFiles.add(path);
+            batch.forEach(file => {
+                // Try multiple selectors to find the file path
+                const fileHeader = file.querySelector('.file-header');
+                const path = fileHeader?.getAttribute('data-path') || 
+                            file.querySelector('.file-info a')?.getAttribute('title') ||
+                            file.querySelector('.file-info')?.getAttribute('data-path');
+                
+                if (path) {
+                    if (this.DEBUG_MODE) {
+                        this.log('Found changed file:', path, 'debug');
+                    }
+                    this.changedFiles.add(path);
+                } else {
+                    this.log('Could not find path for file:', file.innerHTML, 'warn');
+                }
+            });
+            
+            processed += batch.length;
+            
+            // If there are more files to process, schedule the next batch
+            if (processed < files.length) {
+                setTimeout(processNextBatch, 0); // Use setTimeout to avoid blocking the UI
             } else {
-                console.warn('Could not find path for file:', file.innerHTML);
+                this.log('Total files found:', this.changedFiles.size, 'info');
+                
+                // Only update UI if we have files and this is not the initial load
+                if (this.changedFiles.size > 0) {
+                    this.updateUI();
+                }
             }
-        });
+        };
         
-        console.log('Total files found:', this.changedFiles.size);
-        
-        // Only update UI if we have files and this is not the initial load
-        if (this.changedFiles.size > 0) {
-            this.updateUI();
-        }
+        // Start processing the first batch
+        processNextBatch();
     }
 
     async waitForAllFiles() {
@@ -575,7 +621,9 @@ class CodeOwnersAnalyzer {
         patternMap.forEach((patternOwners, patternStr) => {
             // Calculate specificity score
             const specificityScore = this.calculatePatternSpecificity(patternStr, filePath);
-            console.log(`Pattern ${patternStr} for file ${filePath} has specificity score: ${specificityScore}`);
+            if (this.DEBUG_MODE) {
+                this.log(`Pattern ${patternStr} for file ${filePath} has specificity score: ${specificityScore}`, 'debug');
+            }
             
             if (specificityScore > highestSpecificityScore) {
                 highestSpecificityScore = specificityScore;
@@ -589,7 +637,18 @@ class CodeOwnersAnalyzer {
             mostSpecificOwners.forEach(owner => owners.add(owner));
         }
 
-        console.log(`Found ${owners.size} owners for file ${filePath} (pattern: ${mostSpecificPattern}, score: ${highestSpecificityScore}):`, Array.from(owners));
+        if (this.DEBUG_MODE || owners.size === 0) {
+            this.log(`Found ${owners.size} owners for file ${filePath} (pattern: ${mostSpecificPattern}, score: ${highestSpecificityScore}):`, 
+                     owners.size > 0 ? 'info' : 'warn', 
+                     Array.from(owners));
+        }
+        
+        // Track the file in the appropriate set
+        if (owners.size > 0) {
+            this.filesWithOwners.add(filePath);
+        } else {
+            this.filesWithoutOwners.add(filePath);
+        }
         
         // Cache the result before returning
         this._fileOwnersCache[filePath] = owners;
@@ -607,25 +666,33 @@ class CodeOwnersAnalyzer {
         if (patternStr.match(/\/\*\*\/\*\.[a-zA-Z0-9]+$/) && 
             patternStr.endsWith('*.' + fileExtension)) {
             score += 1000; // Super high boost for exact file extension pattern match
-            console.log(`EXTENSION MATCH: Added 1000 points for ${patternStr} matching file with extension ${fileExtension}`);
+            if (this.DEBUG_MODE) {
+                this.log(`EXTENSION MATCH: Added 1000 points for ${patternStr} matching file with extension ${fileExtension}`, 'debug');
+            }
         }
         
         // For general file extension pattern matches without **
         else if (fileExtension && patternStr.includes('.' + fileExtension)) {
             score += 100;
-            console.log(`Added 100 points for pattern with extension .${fileExtension}`);
+            if (this.DEBUG_MODE) {
+                this.log(`Added 100 points for pattern with extension .${fileExtension}`, 'debug');
+            }
         }
         
         // For patterns with * wildcards matching file extensions
         if (patternStr.includes('*.' + fileExtension)) {
             score += 50;
-            console.log(`Added 50 points for *.${fileExtension} pattern match`);
+            if (this.DEBUG_MODE) {
+                this.log(`Added 50 points for *.${fileExtension} pattern match`, 'debug');
+            }
         }
         
         // REDUCED PENALTY - If the pattern is a directory pattern and not a file pattern
         if ((patternStr.endsWith('/') || !patternStr.includes('.')) && fileExtension) {
             score -= 5; // Small penalty
-            console.log(`Minor penalty: Reduced 5 points for directory pattern ${patternStr} matching a file with extension`);
+            if (this.DEBUG_MODE) {
+                this.log(`Minor penalty: Reduced 5 points for directory pattern ${patternStr} matching a file with extension`, 'debug');
+            }
         }
         
         // START WITH A BASE SCORE to avoid negative values
@@ -657,7 +724,9 @@ class CodeOwnersAnalyzer {
         const wildcardCount = (patternStr.match(/\*/g) || []).length;
         score -= wildcardCount;  // Reduced from wildcardCount * 2 to just wildcardCount
         
-        console.log(`Final score for pattern ${patternStr} with file ${filePath}: ${score}`);
+        if (this.DEBUG_MODE) {
+            this.log(`Final score for pattern ${patternStr} with file ${filePath}: ${score}`, 'debug');
+        }
         return score;
     }
 
@@ -682,18 +751,16 @@ class CodeOwnersAnalyzer {
     analyzeOwnership() {
         const fullCoverageOwners = new Set();
         const ownerToFiles = new Map();
-        const filesWithOwners = new Set();
-        console.log('Analyzing ownership for files:', Array.from(this.changedFiles));
+        this.log('Analyzing ownership for files:', this.DEBUG_MODE ? 'info' : 'debug', Array.from(this.changedFiles));
 
         // Get PR author to exclude them
         const prAuthor = this.prAuthor;
-        console.log('PR author to exclude:', prAuthor);
+        this.log('PR author to exclude:', 'info', prAuthor);
 
         // Map owners to their covered files and track files that have owners
         this.changedFiles.forEach(file => {
             const fileOwners = this.getFileOwners(file);
             if (fileOwners.size > 0) {
-                filesWithOwners.add(file);
                 fileOwners.forEach(owner => {
                     // Skip the PR author
                     if (owner === prAuthor) return;
@@ -703,36 +770,46 @@ class CodeOwnersAnalyzer {
                     }
                     ownerToFiles.get(owner).add(file);
                 });
-            } else {
-                console.log(`File ${file} has no owners - will be ignored for coverage`);
+            } else if (this.DEBUG_MODE) {
+                this.log(`File ${file} has no owners - will be ignored for coverage`, 'debug');
             }
         });
 
         // Find owners with full coverage (of files that have owners)
         ownerToFiles.forEach((files, owner) => {
-            if (files.size === filesWithOwners.size) {
+            if (files.size === this.filesWithOwners.size) {
                 fullCoverageOwners.add(owner);
             }
         });
 
-        console.log('Owner to files mapping:', Object.fromEntries([...ownerToFiles].map(([k, v]) => [k, Array.from(v)])));
-        console.log('Full coverage owners:', Array.from(fullCoverageOwners));
+        if (this.DEBUG_MODE) {
+            this.log('Owner to files mapping:', 'debug', 
+                    Object.fromEntries([...ownerToFiles].map(([k, v]) => [k, Array.from(v)])));
+        }
+        this.log('Full coverage owners:', 'info', Array.from(fullCoverageOwners));
 
         // Find combined sets of owners for full coverage
-        const combinedSets = this.findCombinedOwnerSet(ownerToFiles, filesWithOwners);
-        console.log('Combined Coverage Sets:', combinedSets);
+        const combinedSets = this.findCombinedOwnerSet(ownerToFiles);
+        this.log('Combined Coverage Sets:', 'info', combinedSets);
 
         return {
             fullCoverageOwners: Array.from(fullCoverageOwners),
-            combinedSets: combinedSets
+            combinedSets: combinedSets,
+            fileStats: {
+                total: this.changedFiles.size,
+                withOwners: this.filesWithOwners.size,
+                withoutOwners: this.filesWithoutOwners.size
+            }
         };
     }
 
-    findCombinedOwnerSet(ownerToFiles, filesWithOwners) {
+    findCombinedOwnerSet(ownerToFiles) {
         const owners = Array.from(ownerToFiles.keys());
         
-        console.log('Finding combined set for files:', Array.from(filesWithOwners));
-        console.log('Available owners:', owners);
+        if (this.DEBUG_MODE) {
+            this.log('Finding combined set for files:', 'debug', Array.from(this.filesWithOwners));
+            this.log('Available owners:', 'debug', owners);
+        }
 
         // First find owners with full coverage
         const fullCoverageOwners = new Set();
@@ -740,7 +817,7 @@ class CodeOwnersAnalyzer {
             // Skip PR author
             if (owner === this.prAuthor) return;
 
-            if (files.size === filesWithOwners.size) {
+            if (files.size === this.filesWithOwners.size) {
                 fullCoverageOwners.add(owner);
             }
         });
@@ -751,7 +828,7 @@ class CodeOwnersAnalyzer {
         );
         
         if (partialOwners.length === 0) {
-            console.log('No partial coverage owners found');
+            this.log('No partial coverage owners found', 'info');
             return [];
         }
 
@@ -789,10 +866,10 @@ class CodeOwnersAnalyzer {
             }
             return false;
         };
-        
+                
         combinationLoop:
         for (let i = 1; i <= Math.min(this.MAX_COMBINATION_SIZE, partialOwners.length); i++) {
-            console.log(`Trying combinations of ${i} partial owners...`);
+            this.log(`Trying combinations of ${i} partial owners...`, 'info');
             
             // Optimization: Avoid generating all combinations at once
             // Instead, generate and process them one by one
@@ -801,15 +878,15 @@ class CodeOwnersAnalyzer {
             for (const combination of combinations) {
                 // Exit early if we've found enough combinations
                 if (combinedSets.length >= this.MAX_COMBINATIONS_TO_SHOW) {
-                    console.log(`Reached maximum of ${this.MAX_COMBINATIONS_TO_SHOW} combinations, stopping search`);
+                    this.log(`Reached maximum of ${this.MAX_COMBINATIONS_TO_SHOW} combinations, stopping search`, 'info');
                     break combinationLoop;
                 }
                 
                 // Skip this combination if it's a superset of an existing valid combination
                 if (isRedundantCombination(combination)) {
-                    // Only log every 100th redundant combination to reduce console spam
-                    if (Math.random() < 0.01) {
-                        console.log(`Skipping redundant combination: ${combination}`);
+                    // Only log occasionally to reduce console spam
+                    if (this.DEBUG_MODE && Math.random() < 0.01) {
+                        this.log(`Skipping redundant combination: ${combination}`, 'debug');
                     }
                     continue;
                 }
@@ -817,9 +894,9 @@ class CodeOwnersAnalyzer {
                 const coverage = getCoverage(combination);
                 
                 // Add combinations that provide full coverage
-                if (coverage.size === filesWithOwners.size) {
+                if (coverage.size === this.filesWithOwners.size) {
                     combinedSets.push(combination);
-                    console.log('Found valid combination:', combination);
+                    this.log('Found valid combination:', 'info', combination);
                 }
             }
         }
@@ -992,17 +1069,20 @@ class CodeOwnersAnalyzer {
     }
 
     showLoading(contentArea) {
-        console.log('Showing loading state...');
+        this.log('Showing loading state...', 'info');
         if (!contentArea) {
-            console.error('No content area provided to showLoading');
+            this.log('No content area provided to showLoading', 'error');
             return;
         }
+        
+        // Fix SVG path error by using a correct SVG spinner
         contentArea.innerHTML = `
             <div class="d-flex flex-column">
                 <div class="color-fg-muted">
                     <div class="d-flex flex-items-center">
-                        <svg style="animation: spin 1s linear infinite;" class="mr-2" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path fill-rule="evenodd" clip-rule="evenodd" d="M8 4C8.55228 4 9 3.55228 9 3C9 2.44772 8.55228 2 8 2C7.44772 2 7 2.44772 7 3C7 3.55228 7.44772 4 8 4ZM8 14C8.55228 14 9 13.5523 9 13C9 12.4477 8.55228 12 8 12C7.44772 12 7 12.4477 7 13C7 13.5523 7.44772 14 8 14ZM14 8C14 8.55228 13.5523 9 13 9C12.4477 9 12 8.55228 12 8C12 7.44772 12.4477 7 13 7C13.5523 7 14 7.44772 14 8 14ZM4 8C4 8.55228 3.55228 9 3 9C2.44772 9 2 8.55228 2 8C2 7.44772 2.44772 7 3 7C3.55228 7 4 7.44772 4 8Z" fill="currentColor"/>
+                        <svg class="mr-2 anim-rotate" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <circle cx="8" cy="8" r="7" stroke="currentColor" stroke-opacity="0.25" stroke-width="2" fill="none" />
+                            <path d="M15 8a7.002 7.002 0 00-7-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
                         </svg>
                         Analyzing code ownership...
                     </div>
@@ -1011,21 +1091,24 @@ class CodeOwnersAnalyzer {
         `;
     }
 
-    showResults(fullCoverageOwners, combinedSets, approvedReviewers) {
-        console.log('Showing results with approvals:', { 
+    showResults(fullCoverageOwners, combinedSets, approvedReviewers, fileStats) {
+        this.log('Showing results with approvals:', this.DEBUG_MODE ? 'info' : 'debug', { 
             fullCoverageOwners, 
             combinedSets, 
-            approvedReviewers: Array.from(approvedReviewers)
+            approvedReviewers: Array.from(approvedReviewers),
+            fileStats
         });
         const contentArea = document.getElementById('code-owners-content');
         if (!contentArea) {
-            console.error('Could not find content area to update');
+            this.log('Could not find content area to update', 'error');
             return;
         }
 
         const createOwnerElement = (owner) => {
             const isApproved = approvedReviewers.has(owner);
-            console.log(`Owner ${owner} approved status:`, isApproved);
+            if (this.DEBUG_MODE) {
+                this.log(`Owner ${owner} approved status:`, 'debug', isApproved);
+            }
             const username = owner.substring(1); // Remove @ symbol
             return `
                 <li>
@@ -1040,7 +1123,9 @@ class CodeOwnersAnalyzer {
             return `<span class="combined-set">` + owners.map(owner => {
                 const isApproved = approvedReviewers.has(owner);
                 const username = owner.substring(1); // Remove @ symbol
-                console.log(`Combined set owner ${owner} approved status:`, isApproved);
+                if (this.DEBUG_MODE) {
+                    this.log(`Combined set owner ${owner} approved status:`, 'debug', isApproved);
+                }
                 return `
                     <span class="d-inline-flex flex-items-center">
                         <img src="https://github.com/${username}.png" alt="${username}" 
@@ -1106,9 +1191,13 @@ class CodeOwnersAnalyzer {
             </div>
         `;
 
-        // Update the status bar
+        // Update the status bar with simplified text
         const statusText = document.getElementById('status-text');
-        statusText.textContent = `Processed ${this.changedFiles.size} files`;
+        // Only show "has owners" count if not all files have owners
+        const statusBarText = fileStats.withOwners < fileStats.total 
+            ? `Processed ${fileStats.total} files (${fileStats.withOwners} has owners)`
+            : `Processed ${fileStats.total} files`;
+        statusText.textContent = statusBarText;
 
         // Add click handlers for section toggles and double-click for section titles
         contentArea.querySelectorAll('.js-section-toggle').forEach(button => {
@@ -1154,7 +1243,7 @@ class CodeOwnersAnalyzer {
         });
 
         // Add hover handlers for owners to update the status bar
-        const baseStatusText = `Processed ${this.changedFiles.size} files`;
+        const baseStatusText = statusBarText;
 
         // Add hover handlers for individual owners
         contentArea.querySelectorAll('.owners-list li a').forEach(ownerLink => {
@@ -1163,7 +1252,7 @@ class CodeOwnersAnalyzer {
             
             ownerLink.parentElement.addEventListener('mouseenter', () => {
                 if (ownerFiles) {
-                    statusText.textContent = `${owner} owns ${ownerFiles.size}/${this.changedFiles.size} files`;
+                    statusText.textContent = `${owner} owns ${ownerFiles.size}/${fileStats.withOwners} files with owners`;
                 }
             });
             
@@ -1181,7 +1270,7 @@ class CodeOwnersAnalyzer {
                 
                 ownerElement.addEventListener('mouseenter', () => {
                     if (ownerFiles) {
-                        statusText.textContent = `${owner} owns ${ownerFiles.size}/${this.changedFiles.size} files`;
+                        statusText.textContent = `${owner} owns ${ownerFiles.size}/${fileStats.withOwners} files`;
                     }
                 });
                 
@@ -1193,7 +1282,7 @@ class CodeOwnersAnalyzer {
     }
 
     async updateUI() {
-        console.log('Updating UI...');
+        this.log('Updating UI...', 'info');
         const contentArea = document.getElementById('code-owners-content');
         this.showLoading(contentArea);
 
@@ -1202,12 +1291,12 @@ class CodeOwnersAnalyzer {
             const approvedReviewers = await this.getApprovedReviewers();
             
             // Analyze ownership
-            const { fullCoverageOwners, combinedSets } = this.analyzeOwnership();
+            const { fullCoverageOwners, combinedSets, fileStats } = this.analyzeOwnership();
             
             // Update UI with results
-            this.showResults(fullCoverageOwners, combinedSets, approvedReviewers);
+            this.showResults(fullCoverageOwners, combinedSets, approvedReviewers, fileStats);
         } catch (error) {
-            console.error('Error updating UI:', error);
+            this.log('Error updating UI:', 'error', error);
             if (contentArea) {
                 contentArea.innerHTML = `<div class="error-message">Error analyzing code owners: ${error.message}</div>`;
             }
@@ -1362,4 +1451,20 @@ window.addEventListener('error', (event) => {
     if (event.message.includes('Access to storage is not allowed')) {
         event.preventDefault();
     }
+});
+
+// Add CSS for the animation fix
+document.addEventListener('DOMContentLoaded', function() {
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes rotate {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(359deg); }
+        }
+        
+        .anim-rotate {
+            animation: rotate 1s linear infinite;
+        }
+    `;
+    document.head.appendChild(style);
 }); 
