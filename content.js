@@ -273,20 +273,50 @@ class CodeOwnersAnalyzer {
             
             try {
                 // Convert GitHub glob pattern to regex
-                let cleanPattern = pattern
-                    .replace(/[.+?^${}()|[\]\\]/g, '\\$&') // escape special characters
-                    .replace(/\*\*/g, '.*') // convert ** to .*
-                    .replace(/\*/g, '[^/]*') // convert * to [^/]*
-                    .replace(/^\//,'') // remove leading slash
-                    .replace(/\/$/,''); // remove trailing slash
-
+                // Store the original pattern for specificity calculations
+                const originalPattern = pattern;
+                
+                // Special handling for file extension patterns like **/*.graphql
+                let cleanPattern;
+                const fileExtensionMatch = pattern.match(/\/\*\*\/\*\.([a-zA-Z0-9]+)$/);
+                
+                if (fileExtensionMatch) {
+                    // This is a pattern like /path/**/*.graphql
+                    const extension = fileExtensionMatch[1];
+                    const basePath = pattern.substring(0, pattern.indexOf('/**/'));
+                    
+                    // Create a regex that matches any file with this extension in any subdirectory
+                    cleanPattern = basePath.replace(/[.+?^${}()|[\]\\]/g, '\\$&') // escape special characters
+                        .replace(/^\//,'') // remove leading slash
+                        + '(?:/.*)?\\.' + extension + '$';
+                    
+                    console.log(`Special extension pattern ${pattern} converted to: ${cleanPattern}`);
+                } else if (pattern.includes('**/')) {
+                    // Handle **/ pattern to match any number of directory levels
+                    cleanPattern = pattern
+                        .replace(/[.+?^${}()|[\]\\]/g, '\\$&') // escape special characters
+                        .replace(/\*\*\//g, '(?:.*/)?') // convert **/ to match any number of directories
+                        .replace(/\*/g, '[^/]*') // convert remaining * to [^/]*
+                        .replace(/^\//,'') // remove leading slash
+                        .replace(/\/$/,''); // remove trailing slash
+                } else {
+                    cleanPattern = pattern
+                        .replace(/[.+?^${}()|[\]\\]/g, '\\$&') // escape special characters
+                        .replace(/\*\*/g, '.*') // convert ** to .*
+                        .replace(/\*/g, '[^/]*') // convert * to [^/]*
+                        .replace(/^\//,'') // remove leading slash
+                        .replace(/\/$/,''); // remove trailing slash
+                }
+                
                 console.log('Converted pattern:', pattern, 'to regex:', cleanPattern);
-                const regex = new RegExp(`^${cleanPattern}(?:/.*)?$`);
+                const regex = new RegExp(`^${cleanPattern}`);
                 owners.forEach(owner => {
                     if (!this.codeownersMap.has(owner)) {
                         this.codeownersMap.set(owner, new Set());
                     }
-                    this.codeownersMap.get(owner).add(regex);
+                    // Store the regex and original pattern
+                    const patternObj = { regex, originalPattern };
+                    this.codeownersMap.get(owner).add(patternObj);
                 });
             } catch (error) {
                 console.error('Failed to create regex for pattern:', pattern, error);
@@ -523,13 +553,14 @@ class CodeOwnersAnalyzer {
         const owners = new Set();
         let mostSpecificPattern = '';
         let mostSpecificOwners = new Set();
+        let highestSpecificityScore = -1;
 
         // First collect all patterns and their owners
         const patternMap = new Map(); // pattern string -> Set of owners
         this.codeownersMap.forEach((patterns, owner) => {
-            patterns.forEach(pattern => {
-                if (pattern.test(filePath)) {
-                    const patternStr = pattern.toString().replace(/[\\^$.*+?()[\]{}|]/g, '');
+            patterns.forEach(patternObj => {
+                if (patternObj.regex.test(filePath)) {
+                    const patternStr = patternObj.originalPattern;
                     if (!patternMap.has(patternStr)) {
                         patternMap.set(patternStr, new Set());
                     }
@@ -538,11 +569,14 @@ class CodeOwnersAnalyzer {
             });
         });
 
-        // Find the most specific pattern
-        let longestLength = 0;
+        // Find the most specific pattern using a better specificity scoring method
         patternMap.forEach((patternOwners, patternStr) => {
-            if (patternStr.length > longestLength) {
-                longestLength = patternStr.length;
+            // Calculate specificity score
+            const specificityScore = this.calculatePatternSpecificity(patternStr, filePath);
+            console.log(`Pattern ${patternStr} for file ${filePath} has specificity score: ${specificityScore}`);
+            
+            if (specificityScore > highestSpecificityScore) {
+                highestSpecificityScore = specificityScore;
                 mostSpecificPattern = patternStr;
                 mostSpecificOwners = patternOwners;
             }
@@ -553,11 +587,82 @@ class CodeOwnersAnalyzer {
             mostSpecificOwners.forEach(owner => owners.add(owner));
         }
 
-        console.log(`Found ${owners.size} owners for file ${filePath} (pattern: ${mostSpecificPattern}):`, Array.from(owners));
+        console.log(`Found ${owners.size} owners for file ${filePath} (pattern: ${mostSpecificPattern}, score: ${highestSpecificityScore}):`, Array.from(owners));
         
         // Cache the result before returning
         this._fileOwnersCache[filePath] = owners;
         return owners;
+    }
+
+    calculatePatternSpecificity(patternStr, filePath) {
+        // Higher scores mean more specific patterns
+        let score = 0;
+        
+        // Extract file extension from file path
+        const fileExtension = filePath.split('.').pop();
+        
+        // Special handling for **/*.ext patterns - these should have the highest priority for matching files
+        if (patternStr.match(/\/\*\*\/\*\.[a-zA-Z0-9]+$/) && 
+            patternStr.endsWith('*.' + fileExtension)) {
+            score += 1000; // Super high boost for exact file extension pattern match
+            console.log(`EXTENSION MATCH: Added 1000 points for ${patternStr} matching file with extension ${fileExtension}`);
+        }
+        
+        // For general file extension pattern matches without **
+        else if (fileExtension && patternStr.includes('.' + fileExtension)) {
+            score += 100;
+            console.log(`Added 100 points for pattern with extension .${fileExtension}`);
+        }
+        
+        // For patterns with * wildcards matching file extensions
+        if (patternStr.includes('*.' + fileExtension)) {
+            score += 50;
+            console.log(`Added 50 points for *.${fileExtension} pattern match`);
+        }
+        
+        // REDUCED PENALTY - If the pattern is a directory pattern and not a file pattern
+        if ((patternStr.endsWith('/') || !patternStr.includes('.')) && fileExtension) {
+            // Small penalty for directory patterns matching files with extensions
+            score -= 5; // Was 50, reduced to 5
+            console.log(`Minor penalty: Reduced 5 points for directory pattern ${patternStr} matching a file with extension`);
+        }
+        
+        // START WITH A BASE SCORE to avoid negative values
+        score += 10;
+        console.log(`Added 10 base points`);
+        
+        // Count path segments (more segments = more specific)
+        const segments = patternStr.split('/').filter(s => s.length > 0);
+        const segmentScore = segments.length * 5;
+        score += segmentScore;
+        console.log(`Added ${segmentScore} points for ${segments.length} path segments`);
+        
+        // Add points for exact match segments (those without wildcards)
+        const exactSegments = segments.filter(s => !s.includes('*')).length;
+        const exactSegmentScore = exactSegments * 5;
+        score += exactSegmentScore;
+        console.log(`Added ${exactSegmentScore} points for ${exactSegments} exact segments`);
+        
+        // Path depth - boost score if pattern matches the specific directory structure
+        const pathSegments = filePath.split('/');
+        let matchingSegments = 0;
+        
+        for (let i = 0; i < Math.min(segments.length, pathSegments.length); i++) {
+            if (segments[i] === pathSegments[i]) {
+                matchingSegments++;
+            }
+        }
+        
+        score += matchingSegments * 5;
+        console.log(`Added ${matchingSegments * 5} points for matching path segments`);
+        
+        // Smaller penalty for wildcards
+        const wildcardCount = (patternStr.match(/\*/g) || []).length;
+        score -= wildcardCount;  // Was wildcardCount * 2, reduced to just wildcardCount
+        console.log(`Reduced ${wildcardCount} points for ${wildcardCount} wildcards`);
+        
+        console.log(`Final score for pattern ${patternStr} with file ${filePath}: ${score}`);
+        return score;
     }
 
     async getPRAuthor() {
@@ -665,27 +770,44 @@ class CodeOwnersAnalyzer {
             return covered;
         };
 
-        // Try combinations of partial owners
-        for (let i = 1; i <= Math.min(3, partialOwners.length); i++) {
+        // Helper function to check if a combination is a superset of any existing valid combination
+        const isRedundantCombination = (combination) => {
+            // For each existing valid set
+            for (const validSet of combinedSets) {
+                // If all members of a valid set are in this combination, it's redundant
+                if (validSet.every(owner => combination.includes(owner))) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        // Try combinations of partial owners from smallest to largest size
+        const MAX_COMBINATION_SIZE = 5;
+        
+        for (let i = 1; i <= Math.min(MAX_COMBINATION_SIZE, partialOwners.length); i++) {
             console.log(`Trying combinations of ${i} partial owners...`);
             const combinations = this.getCombinations(partialOwners, i);
             
             for (const combination of combinations) {
+                // Skip this combination if it's a superset of an existing valid combination
+                if (isRedundantCombination(combination)) {
+                    console.log(`Skipping redundant combination: ${combination}`);
+                    continue;
+                }
+                
                 const coverage = getCoverage(combination);
                 console.log(`Combination ${combination} covers ${coverage.size}/${filesWithOwners.size} files`);
                 
-                // Only consider combinations that provide full coverage
+                // Add combinations that provide full coverage
                 if (coverage.size === filesWithOwners.size) {
                     combinedSets.push(combination);
                     console.log('Found valid combination:', combination);
                 }
             }
-            
-            // If we found valid combinations at this size, no need to try larger combinations
-            if (combinedSets.length > 0) break;
         }
 
-        // Sort by combination size (smaller is better)
+        // Sort combinations by size for better UX (smaller combinations first)
         combinedSets.sort((a, b) => a.length - b.length);
         
         return combinedSets;
