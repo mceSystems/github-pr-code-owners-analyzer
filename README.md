@@ -6,7 +6,7 @@ A Chrome extension that analyzes GitHub pull requests to identify code owners an
 
 - Automatically detects and displays code owners for files in a GitHub pull request
 - Shows owners who can individually approve all changed files
-- Displays up to 3 optimal combinations of reviewers who together can approve all files
+- Displays optimal combinations of reviewers who together can approve all files
 - Highlights which owners who have already approved the PR
 - Persists across page refreshes but respects manual dismissal
 - Toggle extension on/off with a single click
