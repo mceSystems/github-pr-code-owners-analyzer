@@ -277,6 +277,9 @@ class CodeOwnersAnalyzer {
             return;
         }
 
+        // Save full content for use in getFileOwners
+        this._rawCodeowners = content;
+
         const lines = content.split('\n');
         for (const line of lines) {
             if (line.startsWith('#') || !line.trim()) continue;
@@ -287,8 +290,8 @@ class CodeOwnersAnalyzer {
             if (!pattern || owners.length === 0) continue;
 
             try {
-                // Convert GitHub glob pattern to regex
-                // Store the original pattern for specificity calculations
+                // Convert GitHub glob pattern to regex for the map approach
+                // Store the original pattern for later use
                 const originalPattern = pattern;
 
                 // Special handling for file extension patterns like **/*.graphql
@@ -324,7 +327,16 @@ class CodeOwnersAnalyzer {
                 }
 
                 this.log('Converted pattern:', pattern, 'to regex:', cleanPattern);
-                const regex = new RegExp(`^${cleanPattern}`);
+                let regex;
+                
+                try {
+                    regex = new RegExp(`^${cleanPattern}`);
+                } catch (regexError) {
+                    this.log(`Error creating regex for pattern ${pattern}: ${regexError.message}`);
+                    // Fallback to a simpler regex
+                    regex = new RegExp(pattern.replace(/^\//,'').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+                }
+                
                 owners.forEach(owner => {
                     if (!this.codeownersMap.has(owner)) {
                         this.codeownersMap.set(owner, new Set());
@@ -589,122 +601,121 @@ class CodeOwnersAnalyzer {
             this._fileOwnersCache = {};
         }
 
-        const owners = new Set();
-        let mostSpecificPattern = '';
-        let mostSpecificOwners = new Set();
-        let highestSpecificityScore = -1;
-
-        // First collect all patterns and their owners
-        const patternMap = new Map(); // pattern string -> Set of owners
-        this.codeownersMap.forEach((patterns, owner) => {
-            patterns.forEach(patternObj => {
-                if (patternObj.regex.test(filePath)) {
-                    const patternStr = patternObj.originalPattern;
-                    if (!patternMap.has(patternStr)) {
-                        patternMap.set(patternStr, new Set());
-                    }
-                    patternMap.get(patternStr).add(owner);
+        // GitHub's algorithm: The last matching pattern in the CODEOWNERS file wins
+        let lastMatchedOwners = new Set();
+        let lastMatchedPattern = '';
+        
+        // We need to iterate through patterns in the same order they appear in the file
+        if (this._rawCodeowners) {
+            const lines = this._rawCodeowners.split('\n');
+            for (const line of lines) {
+                if (line.startsWith('#') || !line.trim()) continue;
+                
+                const [pattern, ...owners] = line.trim().split(/\s+/);
+                if (!pattern || owners.length === 0) continue;
+                
+                // Convert pattern to be comparable with filePath (remove leading slash)
+                const normalizedPattern = pattern.replace(/^\//, '');
+                
+                // Check if this pattern matches the file
+                if (this.doesPatternMatch(normalizedPattern, filePath)) {
+                    this.log(`File ${filePath} matches pattern ${pattern}`);
+                    
+                    // Update to the latest match
+                    lastMatchedOwners = new Set(owners.filter(owner => owner !== this.prAuthor));
+                    lastMatchedPattern = pattern;
                 }
-            });
-        });
-
-        // Find the most specific pattern using a better specificity scoring method
-        patternMap.forEach((patternOwners, patternStr) => {
-            // Calculate specificity score
-            const specificityScore = this.calculatePatternSpecificity(patternStr, filePath);
-            this.log(`Pattern ${patternStr} for file ${filePath} has specificity score: ${specificityScore}`);
-
-            if (specificityScore > highestSpecificityScore) {
-                highestSpecificityScore = specificityScore;
-                mostSpecificPattern = patternStr;
-                mostSpecificOwners = patternOwners;
             }
-        });
-
-        // Add all owners from the most specific pattern
-        if (mostSpecificOwners.size > 0) {
-            mostSpecificOwners.forEach(owner => owners.add(owner));
+        } else {
+            // Fallback to the old method if raw codeowners is not available
+            this.log('WARNING: Using fallback owner matching because raw CODEOWNERS content is not available');
+            
+            const matchingPatterns = new Map();
+            
+            // Collect all matching patterns for this file
+            this.codeownersMap.forEach((patterns, owner) => {
+                if (owner === this.prAuthor) return; // Skip PR author
+                
+                patterns.forEach(patternObj => {
+                    if (patternObj.regex.test(filePath)) {
+                        const patternStr = patternObj.originalPattern;
+                        if (!matchingPatterns.has(patternStr)) {
+                            matchingPatterns.set(patternStr, new Set());
+                        }
+                        matchingPatterns.get(patternStr).add(owner);
+                    }
+                });
+            });
+            
+            if (matchingPatterns.size > 0) {
+                // We don't know the original order, so this is approximate
+                for (const [pattern, owners] of matchingPatterns) {
+                    lastMatchedPattern = pattern;
+                    lastMatchedOwners = owners;
+                }
+            }
         }
-
-        if (owners.size === 0) {
-            this.log(`Found ${owners.size} owners for file ${filePath} (pattern: ${mostSpecificPattern}, score: ${highestSpecificityScore}):`, Array.from(owners));
-        }
-
+        
+        this.log(`Found ${lastMatchedOwners.size} owners for file ${filePath} (pattern: ${lastMatchedPattern}):`, Array.from(lastMatchedOwners));
+        
         // Track the file in the appropriate set
-        if (owners.size > 0) {
+        if (lastMatchedOwners.size > 0) {
             this.filesWithOwners.add(filePath);
         } else {
             this.filesWithoutOwners.add(filePath);
         }
-
+        
         // Cache the result before returning
-        this._fileOwnersCache[filePath] = owners;
-        return owners;
+        this._fileOwnersCache[filePath] = lastMatchedOwners;
+        return lastMatchedOwners;
     }
-
-    calculatePatternSpecificity(patternStr, filePath) {
-        // Higher scores mean more specific patterns
-        let score = 0;
-
-        // Extract file extension from file path
-        const fileExtension = filePath.split('.').pop();
-
-        // Special handling for **/*.ext patterns - these should have the highest priority for matching files
-        if (patternStr.match(/\/\*\*\/\*\.[a-zA-Z0-9]+$/) &&
-            patternStr.endsWith('*.' + fileExtension)) {
-            score += 1000; // Super high boost for exact file extension pattern match
-            this.log(`EXTENSION MATCH: Added 1000 points for ${patternStr} matching file with extension ${fileExtension}`);
+    
+    /**
+     * Checks if a file path matches a given CODEOWNERS pattern.
+     * This implements GitHub's pattern matching algorithm.
+     */
+    doesPatternMatch(pattern, filePath) {
+        // Remove leading slash from pattern and file path for consistency
+        pattern = pattern.replace(/^\//, '');
+        filePath = filePath.replace(/^\//, '');
+        
+        // Special case for exact match
+        if (pattern === filePath) {
+            return true;
         }
-
-        // For general file extension pattern matches without **
-        else if (fileExtension && patternStr.includes('.' + fileExtension)) {
-            score += 100;
-            this.log(`Added 100 points for pattern with extension .${fileExtension}`);
+        
+        // Handle directory patterns (ending with /)
+        if (pattern.endsWith('/')) {
+            return filePath.startsWith(pattern) || filePath === pattern.slice(0, -1);
         }
-
-        // For patterns with * wildcards matching file extensions
-        if (patternStr.includes('*.' + fileExtension)) {
-            score += 50;
-            this.log(`Added 50 points for *.${fileExtension} pattern match`);
+        
+        // Handle file extension patterns (e.g., *.ts)
+        if (pattern.startsWith('*.')) {
+            const extension = pattern.substring(2);
+            return filePath.endsWith(`.${extension}`);
         }
-
-        // REDUCED PENALTY - If the pattern is a directory pattern and not a file pattern
-        if ((patternStr.endsWith('/') || !patternStr.includes('.')) && fileExtension) {
-            score -= 5; // Small penalty
-            this.log(`Minor penalty: Reduced 5 points for directory pattern ${patternStr} matching a file with extension`);
+        
+        // Convert GitHub glob pattern to regex
+        let regexPattern = pattern
+            .replace(/\./g, "\\.") // Escape dots
+            .replace(/\*\*/g, ".*") // Convert ** to match across directories
+            .replace(/\*/g, "[^/]*"); // Convert * to match within one directory
+            
+        // If pattern ends with a directory separator, match files underneath
+        if (pattern.endsWith('/')) {
+            regexPattern = `^${regexPattern}.*`;
+        } else {
+            regexPattern = `^${regexPattern}$`;
         }
-
-        // START WITH A BASE SCORE to avoid negative values
-        score += 10;
-
-        // Count path segments (more segments = more specific)
-        const segments = patternStr.split('/').filter(s => s.length > 0);
-        const segmentScore = segments.length * 5;
-        score += segmentScore;
-
-        // Add points for exact match segments (those without wildcards)
-        const exactSegments = segments.filter(s => !s.includes('*')).length;
-        const exactSegmentScore = exactSegments * 5;
-        score += exactSegmentScore;
-
-        // Path depth - boost score if pattern matches the specific directory structure
-        const pathSegments = filePath.split('/');
-        let matchingSegments = 0;
-
-        for (let i = 0; i < Math.min(segments.length, pathSegments.length); i++) {
-            if (segments[i] === pathSegments[i]) {
-                matchingSegments++;
-            }
+        
+        try {
+            const regex = new RegExp(regexPattern);
+            return regex.test(filePath);
+        } catch (e) {
+            this.log(`Error in pattern matching: ${e.message}`);
+            // Fallback to simpler check
+            return filePath.startsWith(pattern) || filePath === pattern;
         }
-
-        score += matchingSegments * 5;
-
-        // Smaller penalty for wildcards
-        const wildcardCount = (patternStr.match(/\*/g) || []).length;
-        score -= wildcardCount;  // Reduced from wildcardCount * 2 to just wildcardCount
-
-        this.log(`Final score for pattern ${patternStr} with file ${filePath}: ${score}`);
-        return score;
     }
 
     async getPRAuthor() {
