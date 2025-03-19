@@ -686,13 +686,37 @@ class CodeOwnersAnalyzer {
         
         // Handle directory patterns (ending with /)
         if (pattern.endsWith('/')) {
-            return filePath.startsWith(pattern) || filePath === pattern.slice(0, -1);
+            return filePath.startsWith(pattern);
         }
         
-        // Handle file extension patterns (e.g., *.ts)
-        if (pattern.startsWith('*.')) {
-            const extension = pattern.substring(2);
+        // Handle file extension patterns (e.g., *.ts, **/*.graphql)
+        if (pattern.includes('*.')) {
+            const extension = pattern.split('*.').pop();
             return filePath.endsWith(`.${extension}`);
+        }
+        
+        // Handle directory with ** pattern
+        if (pattern.includes('**')) {
+            const parts = pattern.split('**');
+            const start = parts[0];
+            const end = parts[1];
+            
+            // If pattern starts with a path, file must start with that path
+            if (start && !filePath.startsWith(start)) {
+                return false;
+            }
+            
+            // If pattern ends with a path, file must end with that path
+            if (end && !filePath.endsWith(end)) {
+                return false;
+            }
+            
+            return true;
+        }
+        
+        // Handle simple directory pattern
+        if (pattern.endsWith('/')) {
+            return filePath.startsWith(pattern);
         }
         
         // Convert GitHub glob pattern to regex
