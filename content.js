@@ -714,16 +714,17 @@ class CodeOwnersAnalyzer {
             return true;
         }
         
-        // Handle simple directory pattern
-        if (pattern.endsWith('/')) {
-            return filePath.startsWith(pattern);
+        // Handle directory pattern without trailing slash
+        // If the pattern is a directory name, it should match files in that directory
+        if (!pattern.includes('*') && !pattern.includes('.')) {
+            return filePath.startsWith(pattern + '/');
         }
         
         // Convert GitHub glob pattern to regex
         let regexPattern = pattern
             .replace(/\./g, "\\.") // Escape dots
             .replace(/\*\*/g, ".*") // Convert ** to match across directories
-            .replace(/\*/g, "[^/]*"); // Convert * to match within one directory
+            .replace(/\*/g, "[^/]*");
             
         // If pattern ends with a directory separator, match files underneath
         if (pattern.endsWith('/')) {
