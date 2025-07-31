@@ -38,12 +38,16 @@ class CodeOwnersAnalyzer {
             const headerMeta = document.querySelector('.gh-header-meta');
             const headerTitle = document.querySelector('.gh-header-title');
 
-            // Wait for the PR header and state to be loaded
+            // Wait for the PR header and state to be loaded (both old and new layouts)
             await Promise.race([
                 this.waitForElement('.gh-header-meta'),
                 this.waitForElement('.gh-header-title'),
                 this.waitForElement('.pull-request-tab-content'),
-                this.waitForElement('.js-pull-refresh-on-pjax')
+                this.waitForElement('.js-pull-refresh-on-pjax'),
+                // New layout selectors
+                this.waitForElement('.prc-PageHeader-PageHeader-sT1Hp'),
+                this.waitForElement('.StateLabel__StateLabelBase-sc-qthdln-0'),
+                this.waitForElement('[data-target="react-app.reactRoot"]')
             ]);
 
             // Wait specifically for the PR state to be available
@@ -55,17 +59,37 @@ class CodeOwnersAnalyzer {
             this.prAuthor = await this.getPRAuthor();
             this.log('PR author:', this.prAuthor);
 
-            // Check if PR is merged first
+            // Check if PR is merged first (both old and new layouts)
             const mergeStatus = document.querySelector('.State--merged');
-            if (mergeStatus) {
+            
+            // For new layout, check for merged status by text content and merge icon
+            const newLayoutMerged = Array.from(document.querySelectorAll('.StateLabel__StateLabelBase-sc-qthdln-0'))
+                .some(el => {
+                    const text = el.textContent.toLowerCase();
+                    const hasMergeIcon = el.querySelector('svg[aria-label="Pull request"]') && text.includes('merged');
+                    const hasGitMergeIcon = el.querySelector('svg.octicon-git-merge');
+                    return text.includes('merged') || hasGitMergeIcon;
+                });
+                
+            if (mergeStatus || newLayoutMerged) {
                 this.log('PR is merged, not showing UI');
                 return;
             }
 
-            // Show UI for both draft and open PRs
-            const prStateLabel = document.querySelector('.State');
-            const isDraft = prStateLabel && prStateLabel.textContent.toLowerCase().includes('draft');
-            const isOpen = document.querySelector('.State--open') || (prStateLabel && prStateLabel.textContent.toLowerCase().includes('open'));
+            // Show UI for both draft and open PRs (handle both layouts)
+            const prStateLabel = document.querySelector('.State') || 
+                               document.querySelector('.StateLabel__StateLabelBase-sc-qthdln-0');
+            
+            const isDraft = prStateLabel && (
+                prStateLabel.textContent.toLowerCase().includes('draft') ||
+                prStateLabel.classList.contains('State--draft')
+            );
+            
+            const isOpen = document.querySelector('.State--open') || 
+                          (prStateLabel && prStateLabel.textContent.toLowerCase().includes('open')) ||
+                          // New layout checks - open PRs might not have explicit "open" text
+                          (prStateLabel && !prStateLabel.textContent.toLowerCase().includes('merged') && 
+                           !prStateLabel.textContent.toLowerCase().includes('closed'));
 
             this.log('Draft PR detection details:', {
                 'State label text': prStateLabel?.textContent,
@@ -147,9 +171,14 @@ class CodeOwnersAnalyzer {
     async waitForPRState() {
         return new Promise((resolve) => {
             const checkState = () => {
+                // Check for old layout state elements
                 const stateElement = document.querySelector('.State') ||
                     document.querySelector('[data-pull-is-draft]') ||
-                    document.querySelector('.js-issue-title');
+                    document.querySelector('.js-issue-title') ||
+                    // Check for new layout state elements
+                    document.querySelector('.StateLabel__StateLabelBase-sc-qthdln-0') ||
+                    document.querySelector('[role="tab"][aria-selected="true"]') ||
+                    document.querySelector('.prc-PageHeader-Title-LKOsd');
 
                 if (stateElement) {
                     console.log('Found PR state element:', stateElement.outerHTML);
@@ -360,12 +389,18 @@ class CodeOwnersAnalyzer {
         this.log('Setting up file change observer...');
         // Wait for the file list to be available
         const waitForFiles = () => {
-            const fileList = document.querySelector('.js-diff-progressive-container');
+            // Try both old and new layout containers
+            const fileList = document.querySelector('.js-diff-progressive-container') || 
+                             document.querySelector('[data-target="react-app.reactRoot"]') ||
+                             document.querySelector('[data-target="react-partial.reactRoot"]');
+            
             if (!fileList) {
                 this.log('File list not found, retrying in 1s...');
                 setTimeout(waitForFiles, 1000);
                 return;
             }
+
+            this.log('Found file container:', fileList.className || fileList.getAttribute('data-target'));
 
             // Initial update
             this.updateChangedFiles();
@@ -376,13 +411,19 @@ class CodeOwnersAnalyzer {
                 const relevantChanges = mutations.some(mutation => {
                     // Check if nodes were added/removed
                     if (mutation.addedNodes.length > 0 || mutation.removedNodes.length > 0) {
-                        // Verify the changes are file-related
+                        // Verify the changes are file-related (both old and new patterns)
                         return Array.from(mutation.addedNodes).some(node =>
                             node.classList?.contains('file') ||
-                            node.querySelector?.('.file')
+                            node.querySelector?.('.file') ||
+                            node.classList?.contains('Diff-module__diff--GKRfQ') ||
+                            node.querySelector?.('.Diff-module__diff--GKRfQ') ||
+                            node.querySelector?.('.DiffFileHeader-module__diff-file-header--TjXyn')
                         ) || Array.from(mutation.removedNodes).some(node =>
                             node.classList?.contains('file') ||
-                            node.querySelector?.('.file')
+                            node.querySelector?.('.file') ||
+                            node.classList?.contains('Diff-module__diff--GKRfQ') ||
+                            node.querySelector?.('.Diff-module__diff--GKRfQ') ||
+                            node.querySelector?.('.DiffFileHeader-module__diff-file-header--TjXyn')
                         );
                     }
                     return false;
@@ -392,10 +433,12 @@ class CodeOwnersAnalyzer {
                     this.log('File changes detected - updating file list');
                     this.updateChangedFiles();
 
-                    // Check if all files are loaded
-                    const filesCounter = document.querySelector('#files_tab_counter');
-                    const expectedCount = parseInt(filesCounter?.getAttribute('title') || '0');
-                    const currentCount = document.querySelectorAll('.file').length;
+                    // Check if all files are loaded (try both methods)
+                    const filesCounter = document.querySelector('#files_tab_counter') || 
+                                       document.querySelector('[href*="/files"] .prc-CounterLabel-CounterLabel-ZwXPe');
+                    const expectedCount = parseInt(filesCounter?.getAttribute('title') || 
+                                                 filesCounter?.textContent || '0');
+                    const currentCount = this.getAllFileElements().length;
 
                     if (currentCount >= expectedCount && expectedCount > 0) {
                         this.log('All files loaded, disconnecting observer');
@@ -413,6 +456,76 @@ class CodeOwnersAnalyzer {
         waitForFiles();
     }
 
+    // Helper method to get all file elements (both old and new layouts)
+    getAllFileElements() {
+        // Try old layout first
+        const oldFiles = document.querySelectorAll('.file');
+        if (oldFiles.length > 0) {
+            this.log('Using old layout file elements:', oldFiles.length);
+            return oldFiles;
+        }
+
+        // Try new layout 
+        const newFiles = document.querySelectorAll('.Diff-module__diff--GKRfQ, [role="region"][aria-labelledby^="heading"]');
+        this.log('Using new layout file elements:', newFiles.length);
+        return newFiles;
+    }
+
+    // Helper method to extract file path from element (both old and new layouts)
+    getFilePathFromElement(fileElement) {
+        // Try old layout - data-path attribute
+        const fileHeader = fileElement.querySelector('.file-header');
+        if (fileHeader) {
+            const path = fileHeader.getAttribute('data-path') ||
+                        fileElement.querySelector('.file-info a')?.getAttribute('title') ||
+                        fileElement.querySelector('.file-info')?.getAttribute('data-path');
+            if (path) {
+                this.log('Found path via old layout:', path);
+                return path;
+            }
+        }
+
+        // Try new layout patterns
+        // Method 1: aria-label on collapse button
+        const collapseButton = fileElement.querySelector('button[aria-label*="Collapse file:"]');
+        if (collapseButton) {
+            const ariaLabel = collapseButton.getAttribute('aria-label');
+            const match = ariaLabel.match(/Collapse file: (.+)/);
+            if (match) {
+                const path = match[1];
+                this.log('Found path via new layout aria-label:', path);
+                return path;
+            }
+        }
+
+        // Method 2: code element inside filename link
+        const codeElement = fileElement.querySelector('.DiffFileHeader-module__file-name--mY1O5 a code');
+        if (codeElement) {
+            // Remove HTML entities and extra whitespace
+            const path = codeElement.textContent.replace(/\s+/g, ' ').trim();
+            if (path) {
+                this.log('Found path via new layout code element:', path);
+                return path;
+            }
+        }
+
+        // Method 3: try to find in any link href
+        const diffLinks = fileElement.querySelectorAll('a[href*="#diff-"]');
+        if (diffLinks.length > 0) {
+            // Look for a link that might contain the file path in text content
+            for (const link of diffLinks) {
+                const linkText = link.textContent.trim();
+                if (linkText && linkText.includes('/') && !linkText.includes('#')) {
+                    this.log('Found path via new layout link text:', linkText);
+                    return linkText;
+                }
+            }
+        }
+
+        this.log('Could not find path for file element:', fileElement.outerHTML.substring(0, 200));
+        return null;
+    }
+
     async updateChangedFiles() {
         this.log('Updating changed files...');
 
@@ -423,7 +536,7 @@ class CodeOwnersAnalyzer {
         // Wait for the progressive loading to complete
         await this.waitForAllFiles();
 
-        const files = document.querySelectorAll('.file');
+        const files = this.getAllFileElements();
         this.changedFiles.clear();
 
         this.log(`Processing ${files.length} files...`);
@@ -436,17 +549,13 @@ class CodeOwnersAnalyzer {
             const batch = Array.from(files).slice(processed, processed + BATCH_SIZE);
 
             batch.forEach(file => {
-                // Try multiple selectors to find the file path
-                const fileHeader = file.querySelector('.file-header');
-                const path = fileHeader?.getAttribute('data-path') ||
-                    file.querySelector('.file-info a')?.getAttribute('title') ||
-                    file.querySelector('.file-info')?.getAttribute('data-path');
+                const path = this.getFilePathFromElement(file);
 
                 if (path) {
                     this.log('Found changed file:', path);
                     this.changedFiles.add(path);
                 } else {
-                    this.log('Could not find path for file:', file.innerHTML);
+                    this.log('Could not find path for file:', file.outerHTML.substring(0, 200));
                 }
             });
 
@@ -472,17 +581,28 @@ class CodeOwnersAnalyzer {
     async waitForAllFiles() {
         return new Promise(resolve => {
             const checkForLoadingIndicator = () => {
+                // Check for old layout loading indicators
                 const progressiveContainer = document.querySelector('.js-diff-progressive-container');
                 const loadingIndicator = document.querySelector('.js-diff-progressive-spinner');
-                const fileCount = document.querySelectorAll('.file').length;
+                
+                // Get current file count using the universal helper
+                const fileCount = this.getAllFileElements().length;
 
-                // Get file count from the Files tab counter
-                const filesCounter = document.querySelector('#files_tab_counter');
-                const expectedCount = parseInt(filesCounter?.getAttribute('title') || '0');
+                // Get file count from the Files tab counter (try both old and new patterns)
+                const filesCounter = document.querySelector('#files_tab_counter') ||
+                                   document.querySelector('[href*="/files"] .prc-CounterLabel-CounterLabel-ZwXPe');
+                const expectedCount = parseInt(filesCounter?.getAttribute('title') || 
+                                             filesCounter?.textContent || '0');
 
-                this.log(`Waiting for files to load... Current: ${fileCount}, Expected: ${expectedCount}, Counter: "${filesCounter?.getAttribute('title')}"`);
+                this.log(`Waiting for files to load... Current: ${fileCount}, Expected: ${expectedCount}, Counter: "${filesCounter?.getAttribute('title') || filesCounter?.textContent}"`);
 
-                if (!loadingIndicator && (!progressiveContainer || fileCount === expectedCount)) {
+                // For new layout, we don't have loading indicators, so we rely on file count matching
+                const isNewLayout = !progressiveContainer && document.querySelector('[data-target="react-app.reactRoot"]');
+                const loadingComplete = isNewLayout ? 
+                    (fileCount > 0 && fileCount === expectedCount) :
+                    (!loadingIndicator && (!progressiveContainer || fileCount === expectedCount));
+
+                if (loadingComplete) {
                     if (fileCount === 0 || expectedCount === 0) {
                         // If we got 0 files or expected count, wait a bit longer and try again
                         setTimeout(checkForLoadingIndicator, 500);
@@ -745,12 +865,48 @@ class CodeOwnersAnalyzer {
 
     async getPRAuthor() {
         try {
-            // Use the reliable selector that works for finding the PR author
-            const authorElement = document.querySelector('.gh-header-meta .author');
-            if (authorElement) {
-                const author = '@' + authorElement.textContent.trim();
-                this.log('Found PR author:', author);
+            // Try old layout first
+            const oldAuthorElement = document.querySelector('.gh-header-meta .author');
+            if (oldAuthorElement) {
+                const author = '@' + oldAuthorElement.textContent.trim();
+                this.log('Found PR author via old layout:', author);
                 return author;
+            }
+
+            // Try new layout patterns
+            // Method 1: Look for author in the PR summary
+            const newAuthorElement = document.querySelector('.PullRequestHeaderSummary-module__summaryContainer--ah8Ua a[data-hovercard-url*="/users/"]');
+            if (newAuthorElement) {
+                const author = '@' + newAuthorElement.textContent.trim();
+                this.log('Found PR author via new layout method 1:', author);
+                return author;
+            }
+
+            // Method 2: Look in the embedded data (if accessible)
+            const scriptElement = document.querySelector('script[data-target="react-app.embeddedData"]');
+            if (scriptElement) {
+                try {
+                    const data = JSON.parse(scriptElement.textContent);
+                    const author = data.payload?.pullRequest?.author?.login;
+                    if (author) {
+                        const formattedAuthor = '@' + author;
+                        this.log('Found PR author via new layout embedded data:', formattedAuthor);
+                        return formattedAuthor;
+                    }
+                } catch (parseError) {
+                    this.log('Could not parse embedded data for PR author');
+                }
+            }
+
+            // Method 3: Look for author in any hovercard link
+            const hovercardLinks = document.querySelectorAll('a[data-hovercard-url*="/users/"]');
+            for (const link of hovercardLinks) {
+                if (link.closest('.prc-PageHeader-Description-kFg8r') || 
+                    link.closest('.PullRequestHeaderSummary-module__summaryContainer--ah8Ua')) {
+                    const author = '@' + link.textContent.trim();
+                    this.log('Found PR author via new layout method 3:', author);
+                    return author;
+                }
             }
 
             this.log('Could not find PR author');
