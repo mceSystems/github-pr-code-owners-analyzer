@@ -66,7 +66,6 @@ class CodeOwnersAnalyzer {
             const newLayoutMerged = Array.from(document.querySelectorAll('.StateLabel__StateLabelBase-sc-qthdln-0'))
                 .some(el => {
                     const text = el.textContent.toLowerCase();
-                    const hasMergeIcon = el.querySelector('svg[aria-label="Pull request"]') && text.includes('merged');
                     const hasGitMergeIcon = el.querySelector('svg.octicon-git-merge');
                     return text.includes('merged') || hasGitMergeIcon;
                 });
