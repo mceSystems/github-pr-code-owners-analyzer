@@ -1582,26 +1582,7 @@ window.addEventListener('load', clearSessionFlags);
 // Add a flag to track initialization
 let isInitializing = false;
 
-// Add this helper function to safely access storage
-async function safeStorageGet(keys) {
-    try {
-        return await chrome.storage.local.get(keys);
-    } catch (error) {
-        console.log('Storage access error (expected in some contexts):', error.message);
-        // Return a default value
-        const result = {};
-        if (Array.isArray(keys)) {
-            keys.forEach(key => result[key] = null);
-        } else if (typeof keys === 'string') {
-            result[keys] = null;
-        } else if (keys === null) {
-            // Return empty object for all keys
-        }
-        return result;
-    }
-}
-
-// Modify the initializeAnalyzer function to prevent multiple initializations
+// Initialize the analyzer
 async function initializeAnalyzer() {
     // Prevent multiple simultaneous initializations
     if (isInitializing) {
@@ -1615,18 +1596,6 @@ async function initializeAnalyzer() {
         // Clear the session flag on extension initialization
         if (document.readyState === 'complete') {
             sessionStorage.removeItem('codeOwnersPanelClosed');
-        }
-
-        // Check if extension is enabled before doing anything
-        const { enabled } = await safeStorageGet(['enabled']);
-
-        // Default to enabled if we couldn't access storage
-        if (enabled === null) {
-            console.log('Could not access storage, assuming extension is enabled');
-        } else if (!enabled) {
-            console.log('Extension is disabled, skipping initialization');
-            isInitializing = false;
-            return;
         }
 
         const analyzer = new CodeOwnersAnalyzer();
@@ -1654,7 +1623,7 @@ async function handleUrlChange() {
         if (url.includes('/files')) {
             // Wait for GitHub's content to load
             await new Promise(resolve => setTimeout(resolve, 1000));
-            initializeAnalyzer(); // Will check enabled state internally
+            initializeAnalyzer();
         } else {
             removeUI();
         }
@@ -1667,18 +1636,11 @@ document.addEventListener('turbo:render', handleUrlChange);
 
 // Initialize on page load if we're on the files tab
 if (location.href.includes('/files')) {
-    initializeAnalyzer(); // Will check enabled state internally
+    initializeAnalyzer();
 }
 
 // Run on page load
 console.log('Content script loaded!');
-
-// Ignore storage errors
-window.addEventListener('error', (event) => {
-    if (event.message.includes('Access to storage is not allowed')) {
-        event.preventDefault();
-    }
-});
 
 // Add CSS for the animation fix
 document.addEventListener('DOMContentLoaded', function () {

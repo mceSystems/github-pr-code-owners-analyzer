@@ -1,14 +1,8 @@
 {
   "manifest_version": 3,
   "name": "GitHub PR Code Owners Analyzer",
-  "version": "1.1.1",
+  "version": "1.3.0",
   "description": "Analyzes code owners for GitHub PRs",
-  "permissions": [
-    "storage"
-  ],
-  "host_permissions": [
-    "https://github.com/mceSystems/*"
-  ],
   "content_scripts": [{
     "matches": [
       "https://github.com/mceSystems/*/pull/*/files",
