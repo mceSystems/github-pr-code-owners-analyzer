@@ -59,56 +59,24 @@ class CodeOwnersAnalyzer {
             this.prAuthor = await this.getPRAuthor();
             this.log('PR author:', this.prAuthor);
 
-            // Check if PR is merged first (both old and new layouts)
-            const mergeStatus = document.querySelector('.State--merged');
-            
-            // For new layout, check for merged status by text content and merge icon
-            const newLayoutMerged = Array.from(document.querySelectorAll('.StateLabel__StateLabelBase-sc-qthdln-0'))
-                .some(el => {
-                    const text = el.textContent.toLowerCase();
-                    const hasGitMergeIcon = el.querySelector('svg.octicon-git-merge');
-                    return text.includes('merged') || hasGitMergeIcon;
-                });
-                
-            if (mergeStatus || newLayoutMerged) {
+            // Get PR state from multiple sources
+            const prState = await this.getPRState();
+            this.log('Detected PR state:', prState);
+
+            // Don't show UI for merged or closed PRs
+            if (prState.isMerged) {
                 this.log('PR is merged, not showing UI');
                 return;
             }
 
-            // Show UI for both draft and open PRs (handle both layouts)
-            const prStateLabel = document.querySelector('.State') || 
-                               document.querySelector('.StateLabel__StateLabelBase-sc-qthdln-0');
-            
-            const isDraft = prStateLabel && (
-                prStateLabel.textContent.toLowerCase().includes('draft') ||
-                prStateLabel.classList.contains('State--draft')
-            );
-            
-            const isOpen = document.querySelector('.State--open') || 
-                          (prStateLabel && prStateLabel.textContent.toLowerCase().includes('open')) ||
-                          // New layout checks - open PRs might not have explicit "open" text
-                          (prStateLabel && !prStateLabel.textContent.toLowerCase().includes('merged') && 
-                           !prStateLabel.textContent.toLowerCase().includes('closed'));
+            if (prState.isClosed && !prState.isDraft) {
+                this.log('PR is closed, not showing UI');
+                return;
+            }
 
-            this.log('Draft PR detection details:', {
-                'State label text': prStateLabel?.textContent,
-                isDraft
-            });
-
-            // Log all state-related elements for debugging
-            this.log('All state elements:', {
-                'gh-header-meta': headerMeta?.outerHTML,
-                'gh-header-title': headerTitle?.outerHTML,
-                'pull-request-header': document.querySelector('.pull-request-header')?.outerHTML,
-                'State elements': Array.from(document.querySelectorAll('.State')).map(el => ({
-                    text: el.textContent,
-                    classes: el.className,
-                    html: el.outerHTML
-                }))
-            });
-
-            if (isDraft || isOpen) {
-                this.log('PR is draft or open, proceeding with UI creation');
+            // Show UI for draft, open, or unknown state (assume open if we can't determine)
+            if (prState.isDraft || prState.isOpen || prState.state === 'unknown') {
+                this.log('PR is draft, open, or state unknown - proceeding with UI creation');
 
                 // Create UI immediately with loading state
                 this.createUI();
@@ -470,6 +438,14 @@ class CodeOwnersAnalyzer {
         return newFiles;
     }
 
+    // Helper method to clean invisible Unicode characters from file paths
+    cleanFilePath(path) {
+        if (!path) return path;
+        // Remove invisible Unicode characters like Left-to-Right Mark (U+200E), Right-to-Left Mark (U+200F), 
+        // Zero Width Space (U+200B), Zero Width Non-Joiner (U+200C), Zero Width Joiner (U+200D)
+        return path.replace(/[\u200B-\u200F\uFEFF]/g, '').trim();
+    }
+
     // Helper method to extract file path from element (both old and new layouts)
     getFilePathFromElement(fileElement) {
         // Try old layout - data-path attribute
@@ -479,8 +455,9 @@ class CodeOwnersAnalyzer {
                         fileElement.querySelector('.file-info a')?.getAttribute('title') ||
                         fileElement.querySelector('.file-info')?.getAttribute('data-path');
             if (path) {
-                this.log('Found path via old layout:', path);
-                return path;
+                const cleanPath = this.cleanFilePath(path);
+                this.log('Found path via old layout:', cleanPath);
+                return cleanPath;
             }
         }
 
@@ -491,9 +468,9 @@ class CodeOwnersAnalyzer {
             const ariaLabel = collapseButton.getAttribute('aria-label');
             const match = ariaLabel.match(/Collapse file: (.+)/);
             if (match) {
-                const path = match[1];
-                this.log('Found path via new layout aria-label:', path);
-                return path;
+                const cleanPath = this.cleanFilePath(match[1]);
+                this.log('Found path via new layout aria-label:', cleanPath);
+                return cleanPath;
             }
         }
 
@@ -503,8 +480,9 @@ class CodeOwnersAnalyzer {
             // Remove HTML entities and extra whitespace
             const path = codeElement.textContent.replace(/\s+/g, ' ').trim();
             if (path) {
-                this.log('Found path via new layout code element:', path);
-                return path;
+                const cleanPath = this.cleanFilePath(path);
+                this.log('Found path via new layout code element:', cleanPath);
+                return cleanPath;
             }
         }
 
@@ -515,8 +493,9 @@ class CodeOwnersAnalyzer {
             for (const link of diffLinks) {
                 const linkText = link.textContent.trim();
                 if (linkText && linkText.includes('/') && !linkText.includes('#')) {
-                    this.log('Found path via new layout link text:', linkText);
-                    return linkText;
+                    const cleanPath = this.cleanFilePath(linkText);
+                    this.log('Found path via new layout link text:', cleanPath);
+                    return cleanPath;
                 }
             }
         }
@@ -859,6 +838,96 @@ class CodeOwnersAnalyzer {
             this.log(`Error in pattern matching: ${e.message}`);
             // Fallback to simpler check
             return filePath.startsWith(pattern) || filePath === pattern;
+        }
+    }
+
+    async getPRState() {
+        try {
+            // Try to get state from embedded data first (most reliable for new layout)
+            const scriptElement = document.querySelector('script[data-target="react-app.embeddedData"]');
+            if (scriptElement) {
+                try {
+                    const data = JSON.parse(scriptElement.textContent);
+                    const state = data.payload?.pullRequest?.state;
+                    const isDraft = data.payload?.pullRequest?.isDraft;
+                    
+                    if (state) {
+                        this.log('Found PR state via embedded data:', { state, isDraft });
+                        return {
+                            state: state.toLowerCase(),
+                            isOpen: state.toUpperCase() === 'OPEN',
+                            isClosed: state.toUpperCase() === 'CLOSED',
+                            isMerged: state.toUpperCase() === 'MERGED',
+                            isDraft: isDraft === true
+                        };
+                    }
+                } catch (parseError) {
+                    this.log('Could not parse embedded data for PR state');
+                }
+            }
+
+            // Fallback to DOM-based detection (old layout and some new layout cases)
+            // Check if PR is merged
+            const mergeStatus = document.querySelector('.State--merged');
+            const newLayoutMerged = Array.from(document.querySelectorAll('.StateLabel__StateLabelBase-sc-qthdln-0'))
+                .some(el => {
+                    const text = el.textContent.toLowerCase();
+                    const hasGitMergeIcon = el.querySelector('svg.octicon-git-merge');
+                    return text.includes('merged') || hasGitMergeIcon;
+                });
+            
+            if (mergeStatus || newLayoutMerged) {
+                this.log('Found merged state via DOM');
+                return {
+                    state: 'merged',
+                    isOpen: false,
+                    isClosed: true,
+                    isMerged: true,
+                    isDraft: false
+                };
+            }
+
+            // Check for state labels
+            const prStateLabel = document.querySelector('.State') || 
+                               document.querySelector('.StateLabel__StateLabelBase-sc-qthdln-0');
+            
+            if (prStateLabel) {
+                const stateText = prStateLabel.textContent.toLowerCase();
+                const isDraft = stateText.includes('draft') || prStateLabel.classList.contains('State--draft');
+                const isClosed = stateText.includes('closed') || prStateLabel.classList.contains('State--closed');
+                const isOpen = stateText.includes('open') || prStateLabel.classList.contains('State--open');
+                
+                this.log('Found PR state via DOM label:', { stateText, isDraft, isClosed, isOpen });
+                
+                return {
+                    state: isDraft ? 'draft' : (isClosed ? 'closed' : (isOpen ? 'open' : 'unknown')),
+                    isOpen: isOpen || isDraft,
+                    isClosed: isClosed,
+                    isMerged: false,
+                    isDraft: isDraft
+                };
+            }
+
+            // If we're on the /files page and couldn't determine state, assume it's open
+            // (GitHub wouldn't show files for a deleted or inaccessible PR)
+            this.log('Could not determine PR state, assuming open since we are on /files page');
+            return {
+                state: 'unknown',
+                isOpen: true,
+                isClosed: false,
+                isMerged: false,
+                isDraft: false
+            };
+        } catch (error) {
+            console.error('Error getting PR state:', error);
+            // Default to unknown/open
+            return {
+                state: 'unknown',
+                isOpen: true,
+                isClosed: false,
+                isMerged: false,
+                isDraft: false
+            };
         }
     }
 
